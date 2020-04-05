@@ -1,13 +1,6 @@
-// this file exists only so I can have quick access to a REPL
-// with the correct dependencies.
-
-addCommandAlias("cpl", "all compile")
-addCommandAlias("fmt", "all scalafmtSbt scalafmt")
-
-scalaVersion in ThisBuild := "2.12.6"
+scalaVersion in ThisBuild := "2.12.11"
 scalacOptions in ThisBuild ++= Seq(
   "-language:_",
-  //"-Xsource:2.13",
   "-Ypartial-unification",
   "-deprecation"
 )
@@ -15,6 +8,7 @@ scalacOptions in ThisBuild ++= Seq(
 libraryDependencies ++= Seq(
   "com.github.mpilquist" %% "simulacrum"      % "0.13.0",
   "com.chuusai"          %% "shapeless"       % "2.3.3",
+  "org.typelevel"        %% "cats-core"       % "2.0.0",
   "org.scalaz"           %% "scalaz-effect"   % "7.2.25",
   "org.scalaz"           %% "scalaz-ioeffect" % "2.10.1",
   "eu.timepit"           %% "refined-scalaz"  % "0.9.2",
@@ -32,17 +26,7 @@ libraryDependencies ++= Seq(
 )
 
 addCompilerPlugin("org.spire-math" %% "kind-projector" % "0.9.7")
-addCompilerPlugin(
-  "org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.full
-)
-
+addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.full)
 addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.2.4")
 
 scalacOptions in (Compile, console) -= "-Xfatal-warnings"
-initialCommands in (Compile, console) := Seq(
-  "scalaz._, Scalaz._"
-).mkString("import ", ",", "")
-
-//scalafmtOnCompile in ThisBuild := true
-scalafmtConfig in ThisBuild := Some(file("project/scalafmt.conf"))
-scalafmtOnCompile in ThisBuild := true
