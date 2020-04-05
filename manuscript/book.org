@@ -1,27 +1,11 @@
 #+TITLE: Functional Programming for Mortals with Scalaz
-#+AUTHOR: Sam Halliday
-#+DATE: 2017
+#+AUTHOR: Zara Turtle
+#+DATE: 2020
 
 #+STARTUP: showall
 #+TAGS: ME OTHER
 #+TODO: TODO | RESEARCH | NOTES | CHART | DIAGRAM | DRAWING | CODE | VIDEO
 #+OPTIONS: toc:nil
-
-# Σ ⊣ Δ ⊣ Π
-
-#
-#         \/>
-#                .
-#
-#   >=>                  .                .     <++>       
-#            ==>>                                          
-#                                 |+|                      
-#       ==>>     *>       .               |+|             . 
-#                                    <*>                   
-#     .          >>=                              /|       
-#                                               -==+       
-#                             .         <+>                
-#   @@  +|+  |-->                                      .    
 
 * Frontmatter                                                         :final:
 :PROPERTIES:
@@ -85,33 +69,13 @@ them without restriction. Excerpts from Scalaz and related libraries maintain
 their license, reproduced in full in the appendix.
 
 The example application =drone-dynamic-agents= is distributed under the terms of
-the [[https://www.gnu.org/licenses/gpl-3.0.en.html][GPLv3]]: only the snippets in this book are available without restriction.
+the [[https://firstdonoharm.dev/version/2/1/license.html][Hippocratic License 2.1]]: only the snippets in this book are available
+without restriction.
 
 ** Thanks
 
-Diego Esteban Alonso Blas, Raúl Raja Martínez and Peter Neyens of 47
-degrees, Rúnar Bjarnason, Tony Morris, John de Goes and Edward Kmett
-for their help explaining the principles of FP. Kenji Yoshida and
-Jason Zaugg for being the main authors of Scalaz, and Paul Chiusano /
-Miles Sabin for fixing a critical bug in the Scala compiler ([[https://issues.scala-lang.org/browse/SI-2712][SI-2712]]).
-
-Thanks to the readers who gave feedback on early drafts of this text.
-
-Some material was particularly helpful for my own understanding of the concepts
-that are in this book. Thanks to Juan Manuel Serrano for [[https://skillsmatter.com/skillscasts/9904-london-scala-march-meetup#video][All Roads Lead to
-Lambda]], Pere Villega for [[http://perevillega.com/understanding-free-monads][On Free Monads]], Dick Wall and Josh Suereth for [[https://www.youtube.com/watch?v=WDaw2yXAa50][For:
-What is it Good For?]], Erik Bakker for [[https://www.youtube.com/watch?v=hGMndafDcc8][Options in Futures, how to unsuck them]],
-Noel Markham for [[https://www.47deg.com/presentations/2017/06/01/ADT-for-the-win/][ADTs for the Win!]], Sukant Hajra for [[https://www.youtube.com/watch?v=QtZJATIPB0k][Classy Monad Transformers]],
-Luka Jacobowitz for [[https://lukajcb.github.io/blog/functional/2018/01/03/optimizing-tagless-final.html][Optimizing Tagless Final]], Vincent Marquez for [[https://www.youtube.com/watch?v=JPVagd9W4Lo][Index your
-State]], Gabriel Gonzalez for [[http://www.haskellforall.com/2012/12/the-continuation-monad.html][The Continuation Monad]], and Yi Lin Wei / Zainab Ali
-for their tutorials at Hack The Tower meetups.
-
-The helpul souls who patiently explained things to me: Merlin Göttlinger, Edmund
-Noble, Fabio Labella, Adelbert Chang, Michael Pilquist, Paul Snively, Daniel
-Spiewak, Stephen Compall, Brian McKenna, Ryan Delucchi, Pedro Rodriguez, Emily
-Pillmore, Aaron Vargo, Tomas Mikula, Jean-Baptiste Giraudeau, Itamar Ravid, Ross
-A. Baker, Alexander Konovalov, Harrison Houghton, Alexandre Archambault,
-Christopher Davenport, Jose Cardona, Isaac Elliott.
+Sam Halliday for writing the original Functional Programming for Mortals with
+Scalaz, on which this book is based.
 
 ** Practicalities
 

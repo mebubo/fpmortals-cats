@@ -1,4 +1,4 @@
-// Copyright: 2018 Sam Halliday
+// Copyright: 2018 Sam Halliday, 2020 Zara Turtle
 // License: http://www.gnu.org/licenses/lgpl-3.0.en.html
 
 package free

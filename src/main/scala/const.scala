@@ -1,5 +1,5 @@
-// Copyright: 2018 Sam Halliday
-// License: https://creativecommons.org/publicdomain/zero/1.0/
+// Copyright: 2018 Sam Halliday, 2020 Zara Turtle
+// License: https://firstdonoharm.dev/version/2/1/license.html
 
 package const
 

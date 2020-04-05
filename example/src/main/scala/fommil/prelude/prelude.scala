@@ -1,9 +1,7 @@
-// Copyright: 2017 - 2018 Sam Halliday
-// License: http://www.gnu.org/licenses/gpl-3.0.en.html
+// Copyright: 2017 - 2018 Sam Halliday, 2020 Zara Turtle
+// License: https://firstdonoharm.dev/version/2/1/license.html
 
 package fommil
-
-// This file, prelude.scala, is available alternatively under the LGPL 3.0
 
 // in scala 2.13 this can be enabled automatically thanks to
 // https://github.com/scala/scala/pull/6764
