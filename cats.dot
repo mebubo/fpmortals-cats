@@ -3,80 +3,129 @@ digraph G {
   rankdir = BT;
 
   Semigroup
-  Monoid -> Semigroup
+  Band
   Band -> Semigroup
+  Monoid
+  Monoid -> Semigroup
+  Group
+  Group -> Monoid
 
-  Equal
-  Show
-  Order -> Equal
-  Enum -> Order
+  Eq
+  PartialOrder
+  PartialOrder -> Eq
+  Order -> PartialOrder
 
-  InvariantFunctor
-  Functor -> InvariantFunctor
+  Invariant
+  InvariantSemigroupal
+  InvariantSemigroupal -> Invariant
+  Semigroupal
+  InvariantSemigroupal -> Semigroupal
+  InvariantMonoidal
+  InvariantMonoidal -> InvariantSemigroupal
+
+  Functor
+  Functor -> Invariant
+  Apply
+  Apply -> InvariantSemigroupal
   Apply -> Functor
+  Applicative
   Applicative -> Apply
-  Align -> Functor
-  Zip
-  Unzip
-  Bind -> Apply
+  Applicative -> InvariantMonoidal
+  FlatMap
+  FlatMap -> Apply
+  Monad
   Monad -> Applicative
-  Monad -> Bind
+  Monad -> FlatMap
+
+  UnorderedFoldable
   Foldable
-  Foldable1 -> Foldable
+  Foldable -> UnorderedFoldable
+  Reducible
+  Reducible -> Foldable
+  UnorderedTraverse
+  Traverse
   Traverse -> Functor
   Traverse -> Foldable
-  Traverse1 -> Traverse
-  Traverse1 -> Foldable1
+  Traverse -> UnorderedTraverse
+  NonEmptyTraverse
+  NonEmptyTraverse -> Traverse
+  NonEmptyTraverse -> Reducible
 
-  Contravariant -> InvariantFunctor
-  Divide -> Contravariant
-  Divisible -> Divide
-  Cobind -> Functor
-  Comonad -> Cobind
-  Cozip
+  Contravariant
+  Contravariant -> Invariant
+  ContravariantSemigroupal
+  ContravariantSemigroupal -> InvariantSemigroupal
+  ContravariantSemigroupal -> Contravariant
+  ContravariantMonoidal
+  ContravariantMonoidal -> InvariantMonoidal
+  ContravariantMonoidal -> ContravariantSemigroupal
 
-  Plus
-  PlusEmpty -> Plus
-  IsEmpty -> PlusEmpty
-  Optional
+  CoflatMap
+  CoflatMap -> Functor
+  Comonad
+  Comonad -> CoflatMap
 
-  ApplicativePlus -> Applicative
-  ApplicativePlus -> PlusEmpty
-  MonadPlus -> Monad
-  MonadPlus -> ApplicativePlus
+  CommutativeSemigroup
+  CommutativeSemigroup -> Semigroup
+  Semilattice
+  Semilattice -> Band
+  Semilattice -> CommutativeSemigroup
+  CommutativeMonoid
+  CommutativeMonoid -> Monoid
+  BoundedSemilattice
+  BoundedSemilattice -> Semilattice
+  BoundedSemilattice -> CommutativeMonoid
+  CommutativeGroup
+  CommutativeGroup -> Group
+  CommutativeGroup -> CommutativeMonoid
+  CommutativeApply
+  CommutativeApply -> Apply
+  CommutativeApplicative
+  CommutativeApplicative -> Applicative
+  CommutativeApplicative -> CommutativeApply
+  CommutativeFlatMap
+  CommutativeFlatMap -> FlatMap
+  CommutativeFlatMap -> CommutativeApply
+  CommutativeMonad
+  CommutativeMonad -> Monad
+  CommutativeMonad -> CommutativeFlatMap
+  CommutativeMonad -> CommutativeApplicative
 
-  Associative
+  SemigroupK
+  MonoidK
+  MonoidK -> SemigroupK
+  Alternative
+  Alternative -> Applicative
+  Alternative -> MonoidK
+
+  ApplicativeError
+  ApplicativeError -> Applicative
+  MonadError
+  MonadError -> ApplicativeError
+
+  Hash
+  Show
+  Align
+
+  FunctorFilter
+  TraverseFilter
+  TraverseFilter -> FunctorFilter
+
   Bifunctor
   Bifoldable
   Bitraverse -> Bifunctor
   Bitraverse -> Bifoldable
-  Compose
-  Catchable
-  Nondeterminism -> Monad
-  Category -> Compose
-  Choice -> Category
-  Split -> Compose
-  Profunctor
-  Strong -> Profunctor
-  ProChoice -> Profunctor
-  Arrow -> Split
-  Arrow -> Strong
-  Arrow -> Category
+  Bimonad
+  Bimonad -> Monad
+  Bimonad -> Comonad
 
-  LiftIO
-  MonadIO -> LiftIO
-  MonadIO -> Monad
-  LiftControlIO
-  MonadControlIO -> LiftControlIO
-  MonadControlIO -> Monad
-  Resource
+  Distributive
+  Distributive -> Functor
 
-  MonadState -> Monad
-  MonadError -> Monad
-  MonadTell -> Monad
-  MonadReader -> Monad
-  ComonadStore -> Comonad
-
-  BindRec -> Bind
+  StackSafeMonad
+  StackSafeMonad -> Monad
+  NonEmptyParallel
+  Parallel
+  Parallel -> NonEmptyParallel
 
 }

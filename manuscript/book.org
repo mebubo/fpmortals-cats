@@ -1,4 +1,4 @@
-#+TITLE: Functional Programming for Mortals with Scalaz
+#+TITLE: Functional Programming for Mortals with Cats
 #+AUTHOR: Zara Turtle
 #+DATE: 2020
 
@@ -13,18 +13,6 @@
 :END:
 {frontmatter}
 
-#+BEGIN_QUOTE
-"Love is wise; hatred is foolish. In this world, which is getting more
-and more closely interconnected, we have to learn to tolerate each
-other, we have to learn to put up with the fact that some people say
-things that we don't like. We can only live together in that way. But
-if we are to live together, and not die together, we must learn a kind
-of charity and a kind of tolerance, which is absolutely vital to the
-continuation of human life on this planet."
-
-― Bertrand Russell
-#+END_QUOTE
-
 ** About This Book
 
 This book is for the typical Scala developer, probably with a Java background,
@@ -32,8 +20,9 @@ who is both sceptical and curious about the *Functional Programming* (FP)
 paradigm. This book justifies every concept with practical examples, including
 writing a web application.
 
-This book uses [[https://github.com/scalaz/scalaz][Scalaz 7.2]], the most popular, stable, principled and
-comprehensive Functional Programming framework for Scala.
+This book uses [[https://typelevel.org/cats/][Typelevel Cats 2.1]], the most popular Functional Programming
+framework for Scala. Typelevel has a wealth of accessible and idiomatic learning
+resources in a welcoming and safe environment.
 
 This book is designed to be read from cover to cover, in the order presented,
 with a rest between chapters. Earlier chapters encourage coding styles that we
@@ -41,41 +30,23 @@ will later discredit: similar to how we learn Newton's theory of gravity as
 children, and progress to Riemann / Einstein / Maxwell if we become students of
 physics.
 
-A computer is not necessary to follow along, but studying the Scalaz source code
-is encouraged. Some of the more complex code snippets are available with [[https://github.com/fommil/fpmortals/][the
+A computer is not necessary to follow along, but studying the cats source code
+is encouraged. Some of the more complex code snippets are available with [[https://github.com/turt13/fpmortals-cats/][the
 book's source code]] and those who want practical exercises are encouraged to
-(re-)implement Scalaz (and the example application) using the partial
-descriptions presented in this book.
+(re-)implement cats (and the example application) using the partial descriptions
+presented in this book.
 
-We also recommend [[https://www.manning.com/books/functional-programming-in-scala][The Red Book]] as further reading. It teaches how to write an FP
-library in Scala from first principles.
+** Copyright Notice
 
-** Copyleft Notice
+This book is a update of "Functional Programming for Mortals" by Sam Halliday.
 
-This book is *Libre* and follows the philosophy of [[https://www.gnu.org/philosophy/free-sw.en.html][Free Software]]: you can use
-this book as you like, the [[https://github.com/fommil/fpmortals/][source is available]] you can redistribute this book
-and you can distribute your own version. That means you can print it, photocopy
-it, e-mail it, upload it to websites, change it, translate it, charge for it,
-remix it, delete bits, and draw all over it.
+Like the original, this book uses the [[https://creativecommons.org/licenses/by-sa/4.0/legalcode][Creative Commons Attribution ShareAlike
+4.0 International]] (CC BY-SA 4.0) license.
 
-This book is *Copyleft*: if you change the book and distribute your own version,
-you must also pass these freedoms to its recipients.
-
-This book uses the [[https://creativecommons.org/licenses/by-sa/4.0/legalcode][Creative Commons Attribution ShareAlike 4.0 International]] (CC
-BY-SA 4.0) license.
-
-All original code snippets in this book are separately [[https://wiki.creativecommons.org/wiki/CC0][CC0]] licensed, you may use
-them without restriction. Excerpts from Scalaz and related libraries maintain
-their license, reproduced in full in the appendix.
-
-The example application =drone-dynamic-agents= is distributed under the terms of
-the [[https://firstdonoharm.dev/version/2/1/license.html][Hippocratic License 2.1]]: only the snippets in this book are available
-without restriction.
-
-** Thanks
-
-Sam Halliday for writing the original Functional Programming for Mortals with
-Scalaz, on which this book is based.
+All original code snippets in this book and the example application
+=drone-dynamic-agents= are provided under the [[https://firstdonoharm.dev/][Hippocratic License 2.1]]: an
+Ethical Source license that specifically prohibits the use of software to
+violate universal standards of human rights.
 
 ** Practicalities
 
@@ -83,7 +54,7 @@ To set up a project that uses the libraries presented in this book, use a recent
 version of Scala with FP-specific features enabled (e.g. in =build.sbt=):
 
 #+BEGIN_SRC scala
-scalaVersion in ThisBuild := "2.12.6"
+scalaVersion in ThisBuild := "2.12.11"
 scalacOptions in ThisBuild ++= Seq(
   "-language:_",
   "-Ypartial-unification",
@@ -91,11 +62,11 @@ scalacOptions in ThisBuild ++= Seq(
 )
 
 libraryDependencies ++= Seq(
-  "com.github.mpilquist" %% "simulacrum"     % "0.13.0",
-  "org.scalaz"           %% "scalaz-core"    % "7.2.26"
+  "org.typelevel"        %% "simulacrum"      % "1.0.0",
+  "org.typelevel"        %% "cats-core"       % "2.1.1",
 )
 
-addCompilerPlugin("org.spire-math" %% "kind-projector" % "0.9.7")
+addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.11.0" cross CrossVersion.full)
 addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.full)
 #+END_SRC
 
@@ -104,7 +75,7 @@ section. Unless told otherwise, assume that all snippets have the
 following imports:
 
 #+BEGIN_SRC scala
-import scalaz._, Scalaz._
+import cats._, cats.implicits._, cats.data._
 import simulacrum._
 #+END_SRC
 
@@ -237,8 +208,8 @@ object FooEitherString extends Foo[EitherString] {
 }
 #+END_SRC
 
-Alternatively, the [[https://github.com/non/kind-projector/][kind projector]] plugin allows us to avoid the =type=
-alias and use =?= syntax to tell the compiler where the type hole is:
+Alternatively, the [[https://github.com/typelevel/kind-projector/][kind projector]] plugin allows us to avoid the =type= alias and
+use =?= syntax to tell the compiler where the type hole is:
 
 #+BEGIN_SRC scala
 object FooEitherString extends Foo[Either[String, ?]] {
@@ -361,10 +332,10 @@ def echo[C[_]](implicit t: Terminal[C], e: Execution[C]): C[String] =
   } yield in
 #+END_SRC
 
-Our =Execution= has the same signature as a trait in Scalaz called =Monad=,
-except =chain= is =bind= and =create= is =pure=. We say that =C= is /monadic/
-when there is an implicit =Monad[C]= available. In addition, Scalaz has the =Id=
-type alias.
+Our =Execution= has the same signature as a trait in Cats called =Monad=, except
+=chain= is =flatMap= and =create= is =pure=. We say that =C= is /monadic/ when
+there is an implicit =Monad[C]= available. In addition, Cats has the =Id= type
+alias.
 
 The takeaway is: if we write methods that operate on monadic types,
 then we can write sequential code that abstracts over its execution
@@ -475,10 +446,9 @@ to write maintainable, pure functions, that achieve our business's objectives.
   :END:
 ** For Comprehensions
 
-Scala's =for= comprehension is the ideal FP abstraction for sequential
-programs that interact with the world. Since we will be using it a lot,
-we're going to relearn the principles of =for= and how Scalaz can help
-us to write cleaner code.
+Scala's =for= comprehension is the ideal FP abstraction for sequential programs
+that interact with the world. Since we will be using it a lot, we're going to
+relearn the principles of =for= and how Cats can help us to write cleaner code.
 
 This chapter doesn't try to write pure programs and the techniques are
 applicable to non-FP codebases.
@@ -689,10 +659,9 @@ trait ForComprehensible[C[_]] {
 }
 #+END_SRC
 
-If the context (=C[_]=) of a =for= comprehension doesn't provide its
-own =map= and =flatMap=, all is not lost. If an implicit
-=scalaz.Bind[T]= is available for =T=, it will provide =map= and
-=flatMap=.
+If the context (=C[_]=) of a =for= comprehension doesn't provide its own =map=
+and =flatMap=, all is not lost. If an implicit =cats.FlatMap[T]= is available
+for =T=, it will provide =map= and =flatMap=.
 
 #+BEGIN_ASIDE
 
@@ -926,10 +895,10 @@ asynchronous:
 
 #+BEGIN_ASIDE
 
-If there is an implicit =Monad[T]= for =T[_]= (i.e. =T= is monadic) then Scalaz
+If there is an implicit =Monad[T]= for =T[_]= (i.e. =T= is monadic) then Cats
 lets us create a =T[A]= from a value =a: A= by calling =a.pure[T]=.
 
-Scalaz provides =Monad[Future]=, and =.pure[Future]= calls =Future.successful=.
+Cats provides =Monad[Future]=, and =.pure[Future]= calls =Future.successful=.
 Besides =pure= being slightly shorter to type, it is a general concept that
 works beyond =Future=, and is therefore recommended.
 
@@ -980,7 +949,7 @@ scala> for {
 
 Here we want =for= to take care of the outer context and let us write
 our code on the inner =Option=. Hiding the outer context is exactly
-what a /monad transformer/ does, and Scalaz provides implementations
+what a /monad transformer/ does, and Cats provides implementations
 for =Option= and =Either= named =OptionT= and =EitherT= respectively.
 
 The outer context can be anything that normally works in a =for=
@@ -997,23 +966,23 @@ scala> val result = for {
 result: OptionT[Future, Int] = OptionT(Future(<not completed>))
 #+END_SRC
 
-=.run= returns us to the original context
+=.value= returns us to the original context
 
 #+BEGIN_SRC scala
-scala> result.run
+scala> result.value
 res: Future[Option[Int]] = Future(<not completed>)
 #+END_SRC
 
 The monad transformer also allows us to mix =Future[Option[_]]= calls with
 methods that just return plain =Future= via =.liftM[OptionT]= (provided by
-scalaz):
+Cats):
 
 #+BEGIN_SRC scala
 scala> def getC: Future[Int] = ...
 scala> val result = for {
          a <- OptionT(getA)
          b <- OptionT(getB)
-         c <- getC.liftM[OptionT]
+         c <- OptionT.liftF(getC)
        } yield a * b / c
 result: OptionT[Future, Int] = OptionT(Future(<not completed>))
 #+END_SRC
@@ -1026,7 +995,7 @@ scala> def getD: Option[Int] = ...
 scala> val result = for {
          a <- OptionT(getA)
          b <- OptionT(getB)
-         c <- getC.liftM[OptionT]
+         c <- OptionT.liftF(getC)
          d <- OptionT(getD.pure[Future])
        } yield (a * b) / (c * d)
 result: OptionT[Future, Int] = OptionT(Future(<not completed>))
@@ -1038,16 +1007,23 @@ required conversions into =OptionT[Future, _]=
 
 #+BEGIN_SRC scala
 def liftFutureOption[A](f: Future[Option[A]]) = OptionT(f)
-def liftFuture[A](f: Future[A]) = f.liftM[OptionT]
+def liftFuture[A](f: Future[A]) = OptionT.liftF(f)
 def liftOption[A](o: Option[A]) = OptionT(o.pure[Future])
 def lift[A](a: A)               = liftOption(Option(a))
 #+END_SRC
 
-combined with the =|>= operator, which applies the function on the
-right to the value on the left, to visually separate the logic from
-the transformers
+To use our DSL we can use the Typelevel Mouse extensions to Cats, add the
+following to your =build.sbt=
 
 #+BEGIN_SRC scala
+libraryDepedencies += "org.typelevel" %% "mouse" % "0.24"
+#+END_SRC
+
+giving us the =|>= operator, which applies the function on the right to the
+value on the left, to visually separate the logic from the transformers
+
+#+BEGIN_SRC scala
+scala> import mouse._
 scala> val result = for {
          a <- getA       |> liftFutureOption
          b <- getB       |> liftFutureOption
@@ -1061,13 +1037,11 @@ result: OptionT[Future, Int] = OptionT(Future(<not completed>))
 #+BEGIN_ASIDE
 =|>= is often called the /thrush operator/ because of its uncanny resemblance to
 the cute bird. Those who do not like symbolic operators can use the alias
-=.into=.
+=.thrush=.
 #+END_ASIDE
 
 This approach also works for =Either= (and others) as the inner context, but
-their lifting methods are more complex and require parameters. Scalaz provides
-monad transformers for a lot of its own types, so it is worth checking if one is
-available.
+their lifting methods are more complex and require parameters.
 
 ** Application Design
 
@@ -1199,8 +1173,7 @@ otherwise the only course of action would be to exception, breaking totality and
 causing a side effect.
 
 We prefer =NonEmptyList=, not because it is a =List=, but because of its
-non-empty property. When we learn about Scalaz's typeclass hierarchy, we will
-see a better way to request non-emptyness.
+non-empty property.
 #+END_ASIDE
 
 *** Business Logic
@@ -1394,7 +1367,7 @@ Because =NeedsAgent= and =Stale= do not cover all possible situations,
 we need a catch-all =case _= to do nothing. Recall from Chapter 2 that
 =.pure= creates the =for='s (monadic) context from a value.
 
-=foldLeftM= is like =foldLeft=, but each iteration of the fold may return a
+=.foldLeftM= is like =.foldLeft=, but each iteration of the fold may return a
 monadic value. In our case, each iteration of the fold returns =F[WorldView]=.
 The =M= is for Monadic. We will find more of these /lifted/ methods that behave
 as one would expect, taking monadic values in place of values.
@@ -1560,17 +1533,11 @@ be performed in parallel.
 In our definition of =initial= we could ask for all the information we
 need at the same time instead of one query at a time.
 
-As opposed to =flatMap= for sequential operations, Scalaz uses
-=Apply= syntax for parallel operations:
+As opposed to =flatMap= for sequential operations, Cats uses
+=Semigroupal= syntax for parallel operations:
 
 #+BEGIN_SRC scala
-^^^^(D.getBacklog, D.getAgents, M.getManaged, M.getAlive, M.getTime)
-#+END_SRC
-
-which can also use infix notation:
-
-#+BEGIN_SRC scala
-(D.getBacklog |@| D.getAgents |@| M.getManaged |@| M.getAlive |@| M.getTime)
+(D.getBacklog, D.getAgents, M.getManaged, M.getAlive, M.getTime).mapN(...)
 #+END_SRC
 
 If each of the parallel operations returns a value in the same monadic
@@ -1579,7 +1546,7 @@ Rewriting =initial= to take advantage of this:
 
 #+BEGIN_SRC scala
 def initial: F[WorldView] =
-  ^^^^(D.getBacklog, D.getAgents, M.getManaged, M.getAlive, M.getTime) {
+  (D.getBacklog, D.getAgents, M.getManaged, M.getAlive, M.getTime).mapN {
     case (db, da, mm, ma, mt) => WorldView(db, da, mm, ma, Map.empty, mt)
   }
 #+END_SRC
@@ -1597,9 +1564,9 @@ reasonable tradeoff since our =update= will gracefully handle the case
 where a =node= is shut down unexpectedly.
 
 We need a method that operates on =NonEmptyList= that allows us to
-=map= each element into an =F[MachineNode]=, returning an
-=F[NonEmptyList[MachineNode]]=. The method is called =traverse=, and
-when we =flatMap= over it we get a =NonEmptyList[MachineNode]= that we
+=.map= each element into an =F[MachineNode]=, returning an
+=F[NonEmptyList[MachineNode]]=. The method is called =.traverse=, and
+when we =.flatMap= over it we get a =NonEmptyList[MachineNode]= that we
 can deal with in a simple way:
 
 #+BEGIN_SRC scala
@@ -1682,13 +1649,14 @@ final case class Z(b: B) extends XYZ
 
 When an ADT refers to itself, we call it a /Recursive Algebraic Data Type/.
 
-=scalaz.IList=, a safe alternative to the stdlib =List=, is recursive because
-=ICons= contains a reference to =IList=.:
+The standard library =List= is recursive because =::= (the cons cell) contains a
+reference to =List=. The following is a simplification of the actual
+implementation:
 
 #+BEGIN_SRC scala
-sealed abstract class IList[A]
-final case class INil[A]() extends IList[A]
-final case class ICons[A](head: A, tail: IList[A]) extends IList[A]
+sealed abstract class List[+A]
+case object Nil extends List[Nothing]
+final case class ::[+A](head: A, tail: List[A]) extends List[A]
 #+END_SRC
 
 **** Functions on ADTs
@@ -1699,10 +1667,9 @@ ADTs can contain /pure functions/
 final case class UserConfiguration(accepts: Int => Boolean)
 #+END_SRC
 
-But ADTs that contain functions come with some caveats as they don't
-translate perfectly onto the JVM. For example, legacy =Serializable=,
-=hashCode=, =equals= and =toString= do not behave as one might
-reasonably expect.
+But ADTs that contain functions come with some caveats as they don't translate
+perfectly onto the JVM. For example, legacy =Serializable=, =.hashCode=,
+=.equals= and =.toString= do not behave as one might reasonably expect.
 
 Unfortunately, =Serializable= is used by popular frameworks, despite
 far superior alternatives. A common pitfall is forgetting that
@@ -1712,7 +1679,7 @@ to legacy Java classes such as =Throwable=, which can carry references
 to arbitrary objects.
 
 We will explore alternatives to the legacy methods when we discuss the
-Scalaz library in the next chapter, at the cost of losing
+Cats library in the next chapter, at the cost of losing
 interoperability with some legacy Java and Scala code.
 
 **** Exhaustivity
@@ -1804,9 +1771,7 @@ final case class AcceptedBoolean(value: Boolean) extends Accepted
 #+END_SRC
 
 Pattern matching on these forms of coproduct can be tedious, which is why [[https://contributors.scala-lang.org/t/733][Union
-Types]] are being explored in the Dotty next-generation Scala compiler. Macros
-such as [[https://github.com/propensive/totalitarian][totalitarian]] and [[https://github.com/frees-io/iota][iotaz]] exist as alternative ways of encoding anonymous
-coproducts.
+Types]] are a Scala 3 language feature.
 
 **** Convey Information
 
@@ -1814,11 +1779,11 @@ Besides being a container for necessary business information, data
 types can be used to encode constraints. For example,
 
 #+BEGIN_SRC scala
-final case class NonEmptyList[A](head: A, tail: IList[A])
+final case class NonEmptyList[A](head: A, tail: List[A])
 #+END_SRC
 
-can never be empty. This makes =scalaz.NonEmptyList= a useful data type despite
-containing the same information as =IList=.
+can never be empty. This makes =cats.data.NonEmptyList= a useful data type despite
+containing the same information as =List=.
 
 Product types often contain types that are far more general than is allowed. In
 traditional OOP this would be handled with input validation through assertions:
@@ -1857,7 +1822,7 @@ library, providing a suite of restrictions to the contents of data. To install
 refined, add the following to =build.sbt=
 
 #+BEGIN_SRC scala
-libraryDependencies += "eu.timepit" %% "refined-scalaz" % "0.9.2"
+libraryDependencies += "eu.timepit" %% "refined-cats" % "0.9.13"
 #+END_SRC
 
 and the following imports
@@ -2339,11 +2304,10 @@ import Numeric.ops._
 def signOfTheTimes[T: Numeric](t: T): T = -(t.abs) * t
 #+END_SRC
 
-The good news is that we never need to write this boilerplate because
-[[https://github.com/mpilquist/simulacrum][Simulacrum]] provides a =@typeclass=
-macro annotation that automatically generates the =apply= and =ops=. It even
-allows us to define alternative (usually symbolic) names for common methods. In
-full:
+The good news is that we never need to write this boilerplate because [[https://github.com/mpilquist/simulacrum][Typelevel
+Simulacrum]] provides a =@typeclass= macro annotation that automatically generates
+the =.apply= and =.ops=. It even allows us to define alternative (usually
+symbolic) names for common methods. In full:
 
 #+BEGIN_SRC scala
 import simulacrum._
@@ -2397,8 +2361,7 @@ methods. Indeed, the Scala compiler performs special handling of
 primitives and converts these method calls into raw =dadd=, =dmul=,
 =dcmpl= and =dcmpg= bytecode instructions, respectively.
 
-We can also implement =Numeric= for Java's =BigDecimal= class (avoid
-=scala.BigDecimal=, [[https://github.com/scala/bug/issues/9670][it is fundamentally broken]])
+We can also implement =Numeric= for Java's =BigDecimal= class.
 
 #+BEGIN_SRC scala
 import java.math.{ BigDecimal => BD }
@@ -2508,12 +2471,12 @@ Implicits are often defined on a =trait=, which is then extended by an
 object. This is to try and control the priority of an implicit
 relative to another more specific one, to avoid ambiguous implicits.
 
-The Scala Language Specification is rather vague for corner cases, and
-the compiler implementation is the /de facto/ standard. There are some
-rules of thumb that we will use throughout this book, e.g. prefer
-=implicit val= over =implicit object= despite the temptation of less
-typing. It is a [[https://github.com/scala/bug/issues/10411][quirk of implicit resolution]] that =implicit object= on
-companion objects are not treated the same as =implicit val=.
+The Scala Language Specification is rather vague for corner cases, and the
+compiler implementation is the /de facto/ standard. There are some rules of
+thumb that we will use throughout this book, e.g. prefer =implicit val= over
+=implicit object= despite the temptation of less typing. It is a [[https://github.com/scala/bug/issues/8697][quirk of
+implicit resolution]] that =implicit object= on companion objects are not treated
+the same as =implicit val=.
 
 Implicit resolution falls short when there is a hierarchy of typeclasses, like
 =Ordering= and =Numeric=. If we write a function that takes an implicit
@@ -2525,9 +2488,6 @@ the /shape/ of the implicit parameters are changed. For example an implicit
 parameter using an alias such as ~type Values[A] = List[Option[A]]~ will
 probably fail to find implicits defined as raw =List[Option[A]]= because the
 shape is changed from a /thing of things/ of =A= to a /thing/ of =A=.
-
-# might also be fixed in scato
-# https://github.com/aloiscochard/scato/issues/15
 
 *** Modelling OAuth2
 
@@ -2551,9 +2511,9 @@ https://console.developers.google.com/apis/credentials?project={PROJECT_ID}
 
 Obtaining a /Client ID/ and a /Client secret/.
 
-The application can then obtain a one time /code/ by making the user
-perform an /Authorization Request/ in their browser (yes, really, *in
-their browser*). We need to make this page open in the browser:
+The application can then obtain a one time /code/ by making the user perform an
+/Authorization Request/ in their browser. We need to make this page open in the
+browser:
 
 #+BEGIN_SRC
 https://accounts.google.com/o/oauth2/v2/auth?\
@@ -2686,12 +2646,12 @@ final case class RefreshResponse(
 #+END_SRC
 
 #+BEGIN_WARNING
-Avoid using =java.net.URL= at all costs: it uses DNS to resolve the
-hostname part when performing =toString=, =equals= or =hashCode=.
+Try to avoid using =java.net.URL=: it uses DNS to resolve the hostname part when
+performing =.toString=, =.equals= or =.hashCode=.
 
-Apart from being insane, and *very very* slow, these methods can throw
-I/O exceptions (are not /pure/), and can change depending on the
-network configuration (are not /deterministic/).
+Apart from being very slow, these methods can throw I/O exceptions (are not
+/pure/), and can change depending on the network configuration (are not
+/deterministic/).
 
 The refined type =String Refined Url= allows us to perform equality checks based
 on the =String= and we can safely construct a =URL= only if it is needed by a
@@ -2708,48 +2668,39 @@ We need to marshal the data classes we defined in the previous section into
 JSON, URLs and POST-encoded forms. Since this requires polymorphism, we will
 need typeclasses.
 
-[[https://github.com/scalaz/scalaz-deriving/tree/master/examples/jsonformat/src][=jsonformat=]] is a simple JSON library that we will study in more detail in a
-later chapter, as it has been written with principled FP and ease of readability
-as its primary design objectives. It consists of a JSON AST and encoder /
-decoder typeclasses:
+=jsonformat= is a simple JSON library that we will study in more detail in a
+later chapter for teaching purposes, we should use [[https://github.com/circe/circe][Typelevel Circe]] for
+production systems.
+
+=jsonformat= consists of a JSON AST and encoder / decoder typeclasses:
 
 #+BEGIN_SRC scala
 package jsonformat
 
 sealed abstract class JsValue
-final case object JsNull                                    extends JsValue
-final case class JsObject(fields: IList[(String, JsValue)]) extends JsValue
-final case class JsArray(elements: IList[JsValue])          extends JsValue
-final case class JsBoolean(value: Boolean)                  extends JsValue
-final case class JsString(value: String)                    extends JsValue
-final case class JsDouble(value: Double)                    extends JsValue
-final case class JsInteger(value: Long)                     extends JsValue
+final case object JsNull                                   extends JsValue
+final case class JsObject(fields: List[(String, JsValue)]) extends JsValue
+final case class JsArray(elements: List[JsValue])          extends JsValue
+final case class JsBoolean(value: Boolean)                 extends JsValue
+final case class JsString(value: String)                   extends JsValue
+final case class JsDouble(value: Double)                   extends JsValue
+final case class JsInteger(value: Long)                    extends JsValue
 
 @typeclass trait JsEncoder[A] {
   def toJson(obj: A): JsValue
 }
 
 @typeclass trait JsDecoder[A] {
-  def fromJson(json: JsValue): String \/ A
+  def fromJson(json: JsValue): Either[String, A]
 }
 #+END_SRC
-
-#+BEGIN_ASIDE
-=\/= is Scalaz's =Either= and has a =.flatMap=. We can use it in =for=
-comprehensions, whereas stdlib =Either= does not support =.flatMap= prior to
-Scala 2.12. It is spoken as /disjunction/, or /angry rabbit/.
-
-=scala.Either= was [[https://issues.scala-lang.org/browse/SI-250][contributed to
-the Scala standard library]] by the creator of Scalaz, Tony Morris, in 2007.
-=\/= was created when unsafe methods were added to =Either=.
-#+END_ASIDE
 
 We need instances of =JsDecoder[AccessResponse]= and =JsDecoder[RefreshResponse]=.
 We can do this by making use of a helper function:
 
 #+BEGIN_SRC scala
     implicit class JsValueOps(j: JsValue) {
-      def getAs[A: JsDecoder](key: String): String \/ A = ...
+      def getAs[A: JsDecoder](key: String): Either[String, A] = ...
     }
 #+END_SRC
 
@@ -2829,8 +2780,8 @@ object UrlEncodedWriter {
   implicit val long: UrlEncodedWriter[Long] =
     (s => Refined.unsafeApply(s.toString))
 
-  implicit def ilist[K: UrlEncodedWriter, V: UrlEncodedWriter]
-    : UrlEncodedWriter[IList[(K, V)]] = { m =>
+  implicit def list[K: UrlEncodedWriter, V: UrlEncodedWriter]
+    : UrlEncodedWriter[List[(K, V)]] = { m =>
     val raw = m.map {
       case (k, v) => k.toUrlEncoded.value + "=" + v.toUrlEncoded.value
     }.intercalate("&")
@@ -2843,7 +2794,7 @@ object UrlEncodedWriter {
 We use =Refined.unsafeApply= when we can logically deduce that the contents of
 the string are already url encoded, bypassing any further checks.
 
-=ilist= is an example of simple typeclass derivation, much as we derived
+=.list= is an example of simple typeclass derivation, much as we derived
 =Numeric[Complex]= from the underlying numeric representation. The
 =.intercalate= method is like =.mkString= but more general.
 
@@ -2881,10 +2832,6 @@ implicit val string: UrlEncodedWriter[String] = instance { s => ... }
 This pattern is still used in code that must support older versions of
 Scala, or for typeclasses instances that need to provide more than one
 method.
-
-Note that there are a lot of bugs around SAM types, as they do not interact with
-all the language features. Revert to the non-SAM variant if there are any
-strange compiler crashes.
 #+END_ASIDE
 
 In a dedicated chapter on /Typeclass Derivation/ we will calculate instances of
@@ -2907,7 +2854,7 @@ we wish to convert:
   }
   object AccessRequest {
     implicit val encoded: UrlEncodedWriter[AccessRequest] = { a =>
-      IList(
+      List(
         "code"          -> a.code.toUrlEncoded,
         "redirect_uri"  -> a.redirect_uri.toUrlEncoded,
         "client_id"     -> a.client_id.toUrlEncoded,
@@ -2919,7 +2866,7 @@ we wish to convert:
   }
   object RefreshRequest {
     implicit val encoded: UrlEncodedWriter[RefreshRequest] = { r =>
-      IList(
+      List(
         "client_secret" -> r.client_secret.toUrlEncoded,
         "refresh_token" -> r.refresh_token.toUrlEncoded,
         "client_id"     -> r.client_id.toUrlEncoded,
@@ -2944,13 +2891,13 @@ responses must have a =JsDecoder= and our =POST= payload must have a
 trait JsonClient[F[_]] {
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A]
 
   def post[P: UrlEncodedWriter, A: JsDecoder](
     uri: String Refined Url,
     payload: P,
-    headers: IList[(String, String] = IList.empty
+    headers: List[(String, String] = Nil
   ): F[A]
 }
 #+END_SRC
@@ -12053,8 +12000,8 @@ for the error type:
 #+END_SRC
 
 #+BEGIN_ASIDE
-=scalaz.ioeffect.IO= is a high performance =IO= by John de Goes. It has a
-separate lifecycle to the core Scalaz library and must be manually added to our
+=scalaz.ioeffect.IO= is a high performance =IO= by REDACTED. It has a separate
+lifecycle to the core Scalaz library and must be manually added to our
 =build.sbt= with
 
 #+BEGIN_SRC scala
