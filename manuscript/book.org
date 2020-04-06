@@ -516,9 +516,7 @@ a.flatMap {
 A =map= over the =b= introduces the =ij= which is flat-mapped along
 with the =j=, then the final =map= for the code in the =yield=.
 
-Unfortunately we cannot assign before any generators. It has been
-requested as a language feature but has not been implemented:
-https://github.com/scala/bug/issues/907
+Unfortunately we cannot assign before any generators.
 
 #+BEGIN_SRC scala
 scala> for {
@@ -618,20 +616,6 @@ Like assignment, a generator can use a pattern match on the left hand side. But
 unlike assignment (which throws =MatchError= on failure), generators are
 /filtered/ and will not fail at runtime. However, there is an inefficient double
 application of the pattern.
-
-#+BEGIN_ASIDE
-The compiler plugin [[https://github.com/oleg-py/better-monadic-for][=better-monadic-for=]] produces alternative, *better*,
-desugarings than the Scala compiler. This example is interpreted as:
-
-#+BEGIN_SRC scala
-reify> for { i: Int <- a } yield i
-
-a.map { (i: Int) => i}
-#+END_SRC
-
-instead of inefficient double matching (in the best case) and silent filtering
-at runtime (in the worst case). Highly recommended.
-#+END_ASIDE
 
 **** For Each
 
