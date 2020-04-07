@@ -3318,7 +3318,7 @@ digraph G {
 @typeclass trait Group[A] extends Monoid[A] {
   def inverse(a: A): A
 
-  def remove(a: A, b: A): A = combine(a, inverse(b))
+  @op("|-|") def remove(a: A, b: A): A = combine(a, inverse(b))
 }
 #+END_SRC
 
@@ -3506,7 +3506,7 @@ digraph G {
 #+BEGIN_SRC scala
 @typeclass trait Equal[F]  {
   @op("===") def eqv(x: A, y: A): Boolean
-  @op("!==") def neqv(x: A, y: A): Boolean = !eqv(x, y)
+  @op("=!=") def neqv(x: A, y: A): Boolean = !eqv(x, y)
 }
 #+END_SRC
 
