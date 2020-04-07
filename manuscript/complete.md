@@ -1459,8 +1459,8 @@ value at runtime using `.refineV`, returning an `Either`
   scala> refineV[NonEmpty]("")
   Left(Predicate isEmpty() did not fail.)
   
-  scala> refineV[NonEmpty]("Sam")
-  Right(Sam)
+  scala> refineV[NonEmpty]("Zara")
+  Right(Zara)
 ~~~~~~~~
 
 If we add the following import
@@ -1475,8 +1475,8 @@ value does not meet the requirements
 
 {lang="text"}
 ~~~~~~~~
-  scala> val sam: String Refined NonEmpty = "Sam"
-  Sam
+  scala> val sam: String Refined NonEmpty = "Zara"
+  Zara
   
   scala> val empty: String Refined NonEmpty = ""
   <console>:21: error: Predicate isEmpty() did not fail.
@@ -2731,5 +2731,289 @@ chapter later.
 
 {width=40%}
 ![](images/cats-core-loners.png)
+
+
+## Appendable Things
+
+{width=25%}
+![](images/cats-appendable.png)
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Semigroup[A] {
+    @op("|+|") def combine(x: A, y: A): A
+  
+    def combineN(value: A, n: Int): A = ...
+  }
+  
+  @typeclass trait Band[A] extends Semigroup[A]
+  @typeclass trait Semilattice[A] extends Band[A]
+  
+  @typeclass trait Monoid[A] extends Semigroup[A] {
+    def empty: A
+  }
+  
+  @typeclass trait Group[A] extends Monoid[A] {
+    def inverse(a: A): A
+  
+    def remove(a: A, b: A): A = combine(a, inverse(b))
+  }
+~~~~~~~~
+
+A> `|+|` is known as the "combine operator" and is more commonly used than the
+A> "`.combine` method".
+
+A `Semigroup` can be defined for a type if two values can be combined. The
+operation must be *associative*, meaning that the order of nested operations
+should not matter, i.e.
+
+{lang="text"}
+~~~~~~~~
+  (a |+| b) |+| c == a |+| (b |+| c)
+  
+  (1 |+| 2) |+| 3 == 1 |+| (2 |+| 3)
+~~~~~~~~
+
+A `Monoid` is a `Semigroup` with an *empty* element. Combining `zero` with any
+other `a` should give `a`.
+
+{lang="text"}
+~~~~~~~~
+  a |+| empty == a
+  
+  a |+| 0 == a
+~~~~~~~~
+
+This is probably bringing back memories of `Numeric` from Chapter 4. There are
+implementations of `Monoid` for all the primitive numbers, but the concept of
+*appendable* things is useful beyond numbers.
+
+{lang="text"}
+~~~~~~~~
+  scala> "hello" |+| " " |+| "world!"
+  res: String = "hello world!"
+  
+  scala> List(1, 2) |+| List(3, 4)
+  res: List[Int] = List(1, 2, 3, 4)
+~~~~~~~~
+
+`Band` has the law that the `.append` operation of the same two
+elements is *idempotent*, i.e. gives the same value. Examples are
+anything that can only be one value, such as `Unit`, least upper
+bounds, or a `Set`. `Band` provides no further methods yet users can
+make use of the guarantees for performance optimisation.
+
+`Semilattice` goes one further and adds the additional guarantee that the order
+of the parameters in `.combine` does not matter.
+
+A> Viktor Klang, of Lightbend fame, lays claim to the phrase
+A> [effectively-once delivery](https://twitter.com/viktorklang/status/789036133434978304) for message processing with idempotent
+A> operations, i.e. `Band.combine`.
+
+A `Group` is a `Monoid` where every value has an inverse, that when combined
+gives the `.empty` element. For example, every `Int` has an inverse which is its
+negated value.
+
+As a realistic example for `Monoid`, consider a trading system that has a large
+database of reusable trade templates. Populating the default values for a new
+trade involves selecting and combining multiple templates, with a "last rule
+wins" merge policy if two templates provide a value for the same field. The
+"selecting" work is already done for us by another system, it is our job to
+combine the templates in order.
+
+We will create a simple template schema to demonstrate the principle,
+but keep in mind that a realistic system would have a more complicated
+ADT.
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Currency
+  case object EUR extends Currency
+  case object USD extends Currency
+  
+  final case class TradeTemplate(
+    payments: List[java.time.LocalDate],
+    ccy: Option[Currency],
+    otc: Option[Boolean]
+  )
+~~~~~~~~
+
+If we write a method that takes `templates: List[TradeTemplate]`, we
+only need to call
+
+{lang="text"}
+~~~~~~~~
+  val zero = Monoid[TradeTemplate].empty
+  templates.foldLeft(zero)(_ |+| _)
+~~~~~~~~
+
+and our job is done!
+
+But to get `zero` or call `|+|` we must have an instance of
+`Monoid[TradeTemplate]`. We can create an instance on the companion:
+
+{lang="text"}
+~~~~~~~~
+  object TradeTemplate {
+    implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
+      TradeTemplate(Nil, None, None),
+      (a, b) => TradeTemplate(a.payments |+| b.payments,
+                              a.ccy |+| b.ccy,
+                              a.otc |+| b.otc)
+    )
+  }
+~~~~~~~~
+
+However, this doesn't compile because there is no `Monoid[Option[Currency]]` or
+`Monoid[Option[Boolean]]`, so we must provide them:
+
+{lang="text"}
+~~~~~~~~
+  def lastWins[A]: Monoid[Option[A]] = Monoid.instance(
+    None,
+    {
+      case (None, None) => None
+      case (only, None) => only
+      case (None, only) => only
+      case (_, winner)  => winner
+    }
+  )
+  
+  implicit val monoidCcy: Monoid[Option[Currency]] = lastWins
+  implicit val monoidOtc: Monoid[Option[Boolean]] = lastWins
+~~~~~~~~
+
+Now everything compiles, let's try it out...
+
+{lang="text"}
+~~~~~~~~
+  scala> import java.time.{LocalDate => LD}
+  scala> val templates = List(
+           TradeTemplate(Nil,                     None,      None),
+           TradeTemplate(Nil,                     Some(EUR), None),
+           TradeTemplate(List(LD.of(2017, 8, 5)), Some(USD), None),
+           TradeTemplate(List(LD.of(2017, 9, 5)), None,      Some(true)),
+           TradeTemplate(Nil,                     None,      Some(false))
+         )
+  
+  scala> templates.foldLeft(zero)(_ |+| _)
+  res: TradeTemplate = TradeTemplate(
+                         List(2017-08-05,2017-09-05),
+                         Some(USD),
+                         Some(false))
+~~~~~~~~
+
+All we needed to do was implement one piece of business logic and
+`Monoid` took care of everything else for us!
+
+Note that the list of `payments` are concatenated. This is because the
+default `Monoid[List]` uses concatenation of elements and happens to
+be the desired behaviour. If the business requirement was different,
+it would be a simple case of providing a custom
+`Monoid[List[LocalDate]]`.
+
+
+## Objecty Things
+
+In the chapter on Data and Functionality we said that the JVM's notion
+of equality breaks down for many things that we can put into an ADT.
+The problem is that the JVM was designed for Java, and `.equals` is
+defined on `java.lang.Object` whether it makes sense or not. There is
+no way to remove `.equals` and no way to guarantee that it is
+implemented.
+
+However, in FP we prefer typeclasses for polymorphic functionality and even the
+concept of equality is captured at compiletime.
+
+{width=20%}
+![](images/cats-objecty.png)
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Equal[F]  {
+    @op("===") def eqv(x: A, y: A): Boolean
+    @op("!==") def neqv(x: A, y: A): Boolean = !eqv(x, y)
+  }
+~~~~~~~~
+
+Indeed `===` (*triple equals*) is more typesafe than `==` (*double
+equals*) because it can only be compiled when the types are the same
+on both sides of the comparison. This catches a lot of bugs.
+
+`.equal` has the same implementation requirements as `Object.equals`
+
+-   *commutative* `f1 === f2` implies `f2 === f1`
+-   *reflexive* `f === f`
+-   *transitive* `f1 === f2 && f2 === f3` implies `f1 === f3`
+
+By throwing away the universal concept of `Object.equals` we don't
+take equality for granted when we construct an ADT, stopping us at
+compiletime from expecting equality when there is none.
+
+Continuing the trend of replacing old Java concepts, rather than data *being a*
+`java.lang.Comparable`, they now *have an* `Order` or `PartialOrder` according
+to:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass PartialOrder[A] extends Eq[A] {
+    def partialCompare(x: A, y: A): Double
+  
+    @op("<" ) def lt(x: A, y: A): Boolean = ...
+    @op("<=") def lte(x: A, y: A): Boolean = ...
+    @op(">" ) def gt(x: A, y: A): Boolean = ...
+    @op(">=") def gte(x: A, y: A): Boolean = ...
+  }
+  
+  @typeclass trait Order[A] extends PartialOrder[A] {
+    def compare(x: A, y: A): Int
+  
+    def max(x: A, y: A): A = ...
+    def min(x: A, y: A): A = ...
+  }
+~~~~~~~~
+
+A `PartialOrder` is for values where there are some corner cases that cannot be
+compared with other values. `Order` requires that every value can be compared to
+every other value.
+
+`Order` implements `.eqv` in terms of the new primitive `.compare`. When a
+typeclass implements a parent's *primitive combinator* with a *derived
+combinator*, an **implied law of substitution** for the typeclass is added. If an
+instance of `Order` were to override `.eqv` for performance reasons, it must
+behave identically the same as the original.
+
+Things that have an order may also have an absolute minimum and an absolute
+maximum value:
+
+{lang="text"}
+~~~~~~~~
+  trait LowerBounded[A] {
+    def minBound: A
+  }
+  trait UpperBounded[A] {
+    def maxBound: A
+  }
+~~~~~~~~
+
+Similarly to `Object.equals`, the concept of `.toString` on every `class` does
+not make sense in Java. We would like to enforce stringyness at compiletime and
+this is exactly what `Show` achieves:
+
+{lang="text"}
+~~~~~~~~
+  trait Show[T] {
+    def show(f: T): String = ...
+  }
+~~~~~~~~
+
+And `Hash` achieves the same thing for `.hashCode`
+
+{lang="text"}
+~~~~~~~~
+  trait Hash[A] {
+    def hash(x: A): Int = ...
+  }
+~~~~~~~~
 
 

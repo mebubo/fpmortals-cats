@@ -21,9 +21,9 @@ object Main {
   def main(args: Array[String]) = {
     println(refined.refineV[NonEmpty](""))
 
-    println(refined.refineV[NonEmpty]("Sam"))
+    println(refined.refineV[NonEmpty]("Zara"))
 
-    val sam: String Refined NonEmpty = "Sam"
+    val zara: String Refined NonEmpty = "Zara"
 
     type Name = NonEmpty And MaxSize[refined.W.`10`.T]
     val wibble: String Refined Name = "wibble"

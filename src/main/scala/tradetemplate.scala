@@ -12,7 +12,7 @@ final case class TradeTemplate(
   otc: Option[Boolean]
 )
 object TradeTemplate {
-  implicit private[this] def lastWins[A]: Monoid[Option[A]] = Monoid.instance(
+  def lastWins[A]: Monoid[Option[A]] = Monoid.instance(
     None,
     {
       case (None, None) => None
@@ -22,12 +22,17 @@ object TradeTemplate {
     }
   )
 
+  implicit val monoidCcy: Monoid[Option[Currency]] = lastWins
+  implicit val monoidOtc: Monoid[Option[Boolean]] = lastWins
+
+  implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
+    TradeTemplate(Nil, None, None),
+    (a, b) => TradeTemplate(a.payments |+| b.payments, b.ccy |+| a.ccy, b.otc |+| a.otc)
+  )
+
   // implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
-  //   (a, b) =>
-  //     TradeTemplate(a.payments |+| b.payments,
-  //                   b.ccy <+> a.ccy,
-  //                   b.otc <+> a.otc),
-  //   TradeTemplate(Nil, None, None)
+  //   TradeTemplate(Nil, None, None),
+  //   (a, b) => TradeTemplate(a.payments |+| b.payments, b.ccy <+> a.ccy, b.otc <+> a.otc)
   // )
 
   // implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(

@@ -1844,8 +1844,8 @@ scala> import refined.refineV
 scala> refineV[NonEmpty]("")
 Left(Predicate isEmpty() did not fail.)
 
-scala> refineV[NonEmpty]("Sam")
-Right(Sam)
+scala> refineV[NonEmpty]("Zara")
+Right(Zara)
 #+END_SRC
 
 If we add the following import
@@ -1858,8 +1858,8 @@ we can construct valid values at compiletime and get an error if the provided
 value does not meet the requirements
 
 #+BEGIN_SRC scala
-scala> val sam: String Refined NonEmpty = "Sam"
-Sam
+scala> val sam: String Refined NonEmpty = "Zara"
+Zara
 
 scala> val empty: String Refined NonEmpty = ""
 <console>:21: error: Predicate isEmpty() did not fail.
@@ -2068,6 +2068,67 @@ when pattern matching, and much more.
 These optimisations are not applicable to OOP =class= hierarchies that
 may be managing state, throwing exceptions, or providing adhoc method
 implementations.
+
+**** Example: Evaluation
+
+Java is a /strict/ evaluation language: all the parameters to a method
+must be evaluated to a /value/ before the method is called. Scala
+introduces the notion of /by-name/ parameters on methods with ~a: =>A~
+syntax. These parameters are wrapped up as a zero argument function
+which is called every time the =a= is referenced.
+
+Scala also has /by-need/ evaluation of values, with the =lazy=
+keyword: the computation is evaluated at most once to produce the
+value. Unfortunately, Scala does not support /by-need/ evaluation of
+method parameters.
+
+#+BEGIN_ASIDE
+If the calculation of a =lazy val= throws an exception, it is retried
+every time it is accessed. Because exceptions can break referential
+transparency, we limit our discussion to =lazy val= calculations that
+do not throw exceptions.
+#+END_ASIDE
+
+Cats formalises the three evaluation strategies with an ADT called =Eval=. The
+following is a simplified version of the implementation:
+
+#+BEGIN_SRC scala
+sealed abstract class Eval[A] {
+  def value: A
+}
+final case class Always[A](f: () => A) extends Eval[A] {
+  def value: A = f()
+}
+final case class Later[A](f: () => A)  extends Eval[A] {
+  lazy val value: A = f
+}
+final case class Now[A](value: A)      extends Eval[A]
+#+END_SRC
+
+The weakest form of evaluation is =Always=, giving no computational
+guarantees. Next is =Later=, guaranteeing /at most once/ evaluation,
+whereas =Now= is pre-computed and therefore /exactly once/
+evaluation.
+
+When we write /pure programs/, we are free to replace any =Always= with
+=Later= or =Now=, and vice versa, with no change to the correctness
+of the program. This is the essence of /referential transparency/: the
+ability to replace a computation by its value, or a value by its
+computation.
+
+In functional programming we almost always want =Now= or =Later=
+(also known as /strict/ and /lazy/): there is little value in =Always=.
+
+#+BEGIN_ASIDE
+/by-name/ and /lazy/ are not the free lunch they appear to be. When
+Scala converts /by-name/ parameters and =lazy val= into bytecode,
+there is an object allocation overhead.
+
+Before rewriting anything to use /by-name/ parameters, or /lazy val/ fields,
+ensure that the cost of the overhead does not eclipse the saving. There is no
+benefit unless there is the possibility of *not* evaluating. High performance
+code that runs in a tight loop and always evaluates will suffer.
+#+END_ASIDE
 
 *** Functionality
 
@@ -3177,6 +3238,8 @@ digraph G {
     PartialOrder;
     PartialOrder -> Eq;
     Order -> PartialOrder;
+    LowerBounded;
+    UpperBounded;
 
     FunctorFilter;
     TraverseFilter;
@@ -3214,48 +3277,54 @@ digraph G {
 #+RESULTS:
 [[file:images/cats-core-loners.png]]
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 *** Appendable Things
 
-#+BEGIN_SRC dot :file images/scalaz-semigroup.png :exports results
+#+BEGIN_SRC dot :file images/cats-appendable.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
 
-    Monoid -> Semigroup;
+    Semigroup;
+    Band;
     Band -> Semigroup;
+    Monoid;
+    Monoid -> Semigroup;
+    Group;
+    Group -> Monoid;
+    Semilattice;
+    Semilattice -> Band;
+
 }
 #+END_SRC
 
-#+ATTR_LATEX: :width 5cm
 #+CAPTION: 25
 #+RESULTS:
-[[file:images/scalaz-semigroup.png]]
+[[file:images/cats-appendable.png]]
 
 #+BEGIN_SRC scala
 @typeclass trait Semigroup[A] {
-  @op("|+|") def append(x: A, y: =>A): A
+  @op("|+|") def combine(x: A, y: A): A
 
-  def multiply1(value: F, n: Int): F = ...
-}
-
-@typeclass trait Monoid[A] extends Semigroup[A] {
-  def zero: A
-
-  def multiply(value: F, n: Int): F =
-    if (n <= 0) zero else multiply1(value, n - 1)
+  def combineN(value: A, n: Int): A = ...
 }
 
 @typeclass trait Band[A] extends Semigroup[A]
+@typeclass trait Semilattice[A] extends Band[A]
+
+@typeclass trait Monoid[A] extends Semigroup[A] {
+  def empty: A
+}
+
+@typeclass trait Group[A] extends Monoid[A] {
+  def inverse(a: A): A
+
+  def remove(a: A, b: A): A = combine(a, inverse(b))
+}
 #+END_SRC
 
 #+BEGIN_ASIDE
-=|+|= is known as the TIE Fighter operator. There is an Advanced TIE
-Fighter in an upcoming section, which is very exciting.
+=|+|= is known as the "combine operator" and is more commonly used than the
+"=.combine= method".
 #+END_ASIDE
 
 A =Semigroup= can be defined for a type if two values can be combined. The
@@ -3268,11 +3337,11 @@ should not matter, i.e.
 (1 |+| 2) |+| 3 == 1 |+| (2 |+| 3)
 #+END_SRC
 
-A =Monoid= is a =Semigroup= with a /zero/ element (also called /empty/
-or /identity/). Combining =zero= with any other =a= should give =a=.
+A =Monoid= is a =Semigroup= with an /empty/ element. Combining =zero= with any
+other =a= should give =a=.
 
 #+BEGIN_SRC scala
-a |+| zero == a
+a |+| empty == a
 
 a |+| 0 == a
 #+END_SRC
@@ -3289,17 +3358,24 @@ scala> List(1, 2) |+| List(3, 4)
 res: List[Int] = List(1, 2, 3, 4)
 #+END_SRC
 
-=Band= has the law that the =append= operation of the same two
+=Band= has the law that the =.append= operation of the same two
 elements is /idempotent/, i.e. gives the same value. Examples are
 anything that can only be one value, such as =Unit=, least upper
 bounds, or a =Set=. =Band= provides no further methods yet users can
 make use of the guarantees for performance optimisation.
 
+=Semilattice= goes one further and adds the additional guarantee that the order
+of the parameters in =.combine= does not matter.
+
 #+BEGIN_ASIDE
 Viktor Klang, of Lightbend fame, lays claim to the phrase
 [[https://twitter.com/viktorklang/status/789036133434978304][effectively-once delivery]] for message processing with idempotent
-operations, i.e. =Band.append=.
+operations, i.e. =Band.combine=.
 #+END_ASIDE
+
+A =Group= is a =Monoid= where every value has an inverse, that when combined
+gives the =.empty= element. For example, every =Int= has an inverse which is its
+negated value.
 
 As a realistic example for =Monoid=, consider a trading system that has a large
 database of reusable trade templates. Populating the default values for a new
@@ -3328,50 +3404,42 @@ If we write a method that takes =templates: List[TradeTemplate]=, we
 only need to call
 
 #+BEGIN_SRC scala
-val zero = Monoid[TradeTemplate].zero
+val zero = Monoid[TradeTemplate].empty
 templates.foldLeft(zero)(_ |+| _)
 #+END_SRC
 
 and our job is done!
 
 But to get =zero= or call =|+|= we must have an instance of
-=Monoid[TradeTemplate]=. Although we will generically derive this in a
-later chapter, for now we will create an instance on the companion:
+=Monoid[TradeTemplate]=. We can create an instance on the companion:
 
 #+BEGIN_SRC scala
 object TradeTemplate {
   implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
+    TradeTemplate(Nil, None, None),
     (a, b) => TradeTemplate(a.payments |+| b.payments,
                             a.ccy |+| b.ccy,
-                            a.otc |+| b.otc),
-    TradeTemplate(Nil, None, None)
+                            a.otc |+| b.otc)
   )
 }
 #+END_SRC
 
-However, this doesn't do what we want because =Monoid[Option[A]]= will append
-its contents, e.g.
+However, this doesn't compile because there is no =Monoid[Option[Currency]]= or
+=Monoid[Option[Boolean]]=, so we must provide them:
 
 #+BEGIN_SRC scala
-scala> Option(2) |+| None
-res: Option[Int] = Some(2)
-scala> Option(2) |+| Option(1)
-res: Option[Int] = Some(3)
-#+END_SRC
+  def lastWins[A]: Monoid[Option[A]] = Monoid.instance(
+    None,
+    {
+      case (None, None) => None
+      case (only, None) => only
+      case (None, only) => only
+      case (_, winner)  => winner
+    }
+  )
 
-whereas we want "last rule wins". We can override the default
-=Monoid[Option[A]]= with our own:
-
-#+BEGIN_SRC scala
-implicit def lastWins[A]: Monoid[Option[A]] = Monoid.instance(
-  {
-    case (None, None)   => None
-    case (only, None)   => only
-    case (None, only)   => only
-    case (_   , winner) => winner
-  },
-  None
-)
+  implicit val monoidCcy: Monoid[Option[Currency]] = lastWins
+  implicit val monoidOtc: Monoid[Option[Boolean]] = lastWins
 #+END_SRC
 
 Now everything compiles, let's try it out...
@@ -3400,57 +3468,45 @@ Note that the list of =payments= are concatenated. This is because the
 default =Monoid[List]= uses concatenation of elements and happens to
 be the desired behaviour. If the business requirement was different,
 it would be a simple case of providing a custom
-=Monoid[List[LocalDate]]=. Recall from Chapter 4 that with compiletime
-polymorphism we can have a different implementation of =append=
-depending on the =E= in =List[E]=, not just the base runtime class
-=List=.
-
-#+BEGIN_ASIDE
-When we introduced typeclasses in Chapter 4 we said that there can only be one
-implementation of a typeclass for a given type parameter, e.g. there is only one
-=Monoid[Option[Boolean]]= in the application. /Orphan instances/ such as
-=lastWins= are the easiest way to break coherence.
-
-We could try to justify locally breaking typeclass coherence by making
-=lastWins= private, but when we get to the =Plus= typeclass we will see a better
-way to implement our =Monoid=. When we get to tagged types, we will see an even
-better way: using =LastOption= instead of =Option= in our data model.
-
-Please don't break typeclass coherence at home, kids.
-#+END_ASIDE
+=Monoid[List[LocalDate]]=.
 
 *** Objecty Things
 
 In the chapter on Data and Functionality we said that the JVM's notion
 of equality breaks down for many things that we can put into an ADT.
-The problem is that the JVM was designed for Java, and =equals= is
+The problem is that the JVM was designed for Java, and =.equals= is
 defined on =java.lang.Object= whether it makes sense or not. There is
-no way to remove =equals= and no way to guarantee that it is
+no way to remove =.equals= and no way to guarantee that it is
 implemented.
 
 However, in FP we prefer typeclasses for polymorphic functionality and even the
 concept of equality is captured at compiletime.
 
-#+BEGIN_SRC dot :file images/scalaz-comparable.png :exports results
+#+BEGIN_SRC dot :file images/cats-objecty.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
 
     Show;
-    Order -> Equal;
-    Enum -> Order;
+    Hash;
+    LowerBounded;
+    UpperBounded;
+
+    Eq;
+    PartialOrder;
+    PartialOrder -> Eq;
+    Order -> PartialOrder;
 }
 #+END_SRC
 
-#+ATTR_LATEX: :width 5cm
 #+CAPTION: 20
 #+RESULTS:
-[[file:images/scalaz-comparable.png]]
+[[file:images/cats-objecty.png]]
 
 #+BEGIN_SRC scala
 @typeclass trait Equal[F]  {
-  @op("===") def equal(a1: F, a2: F): Boolean
-  @op("/==") def notEqual(a1: F, a2: F): Boolean = !equal(a1, a2)
+  @op("===") def eqv(x: A, y: A): Boolean
+  @op("!==") def neqv(x: A, y: A): Boolean = !eqv(x, y)
 }
 #+END_SRC
 
@@ -3458,7 +3514,7 @@ Indeed ~===~ (/triple equals/) is more typesafe than ~==~ (/double
 equals/) because it can only be compiled when the types are the same
 on both sides of the comparison. This catches a lot of bugs.
 
-=equal= has the same implementation requirements as =Object.equals=
+=.equal= has the same implementation requirements as =Object.equals=
 
 - /commutative/ ~f1 === f2~ implies ~f2 === f1~
 - /reflexive/ ~f === f~
@@ -3468,187 +3524,189 @@ By throwing away the universal concept of =Object.equals= we don't
 take equality for granted when we construct an ADT, stopping us at
 compiletime from expecting equality when there is none.
 
-Continuing the trend of replacing old Java concepts, rather than data
-/being a/ =java.lang.Comparable=, they now /have an/ =Order= according
+Continuing the trend of replacing old Java concepts, rather than data /being a/
+=java.lang.Comparable=, they now /have an/ =Order= or =PartialOrder= according
 to:
 
 #+BEGIN_SRC scala
-@typeclass trait Order[F] extends Equal[F] {
-  @op("?|?") def order(x: F, y: F): Ordering
+@typeclass PartialOrder[A] extends Eq[A] {
+  def partialCompare(x: A, y: A): Double
 
-  override  def equal(x: F, y: F): Boolean = order(x, y) == Ordering.EQ
-  @op("<" ) def lt(x: F, y: F): Boolean = ...
-  @op("<=") def lte(x: F, y: F): Boolean = ...
-  @op(">" ) def gt(x: F, y: F): Boolean = ...
-  @op(">=") def gte(x: F, y: F): Boolean = ...
-
-  def max(x: F, y: F): F = ...
-  def min(x: F, y: F): F = ...
-  def sort(x: F, y: F): (F, F) = ...
+  @op("<" ) def lt(x: A, y: A): Boolean = ...
+  @op("<=") def lte(x: A, y: A): Boolean = ...
+  @op(">" ) def gt(x: A, y: A): Boolean = ...
+  @op(">=") def gte(x: A, y: A): Boolean = ...
 }
 
-sealed abstract class Ordering
-object Ordering {
-  case object LT extends Ordering
-  case object EQ extends Ordering
-  case object GT extends Ordering
+@typeclass trait Order[A] extends PartialOrder[A] {
+  def compare(x: A, y: A): Int
+
+  def max(x: A, y: A): A = ...
+  def min(x: A, y: A): A = ...
 }
 #+END_SRC
 
-=Order= implements =.equal= in terms of the new primitive =.order=. When a
+A =PartialOrder= is for values where there are some corner cases that cannot be
+compared with other values. =Order= requires that every value can be compared to
+every other value.
+
+=Order= implements =.eqv= in terms of the new primitive =.compare=. When a
 typeclass implements a parent's /primitive combinator/ with a /derived
 combinator/, an *implied law of substitution* for the typeclass is added. If an
-instance of =Order= were to override =.equal= for performance reasons, it must
+instance of =Order= were to override =.eqv= for performance reasons, it must
 behave identically the same as the original.
 
-Things that have an order may also be discrete, allowing us to walk
-successors and predecessors:
+Things that have an order may also have an absolute minimum and an absolute
+maximum value:
 
 #+BEGIN_SRC scala
-@typeclass trait Enum[F] extends Order[F] {
-  def succ(a: F): F
-  def pred(a: F): F
-  def min: Option[F]
-  def max: Option[F]
-
-  @op("-+-") def succn(n: Int, a: F): F = ...
-  @op("---") def predn(n: Int, a: F): F = ...
-
-  @op("|->" ) def fromToL(from: F, to: F): List[F] = ...
-  @op("|-->") def fromStepToL(from: F, step: Int, to: F): List[F] = ...
-  @op("|=>" ) def fromTo(from: F, to: F): EphemeralStream[F] = ...
-  @op("|==>") def fromStepTo(from: F, step: Int, to: F): EphemeralStream[F] = ...
+trait LowerBounded[A] {
+  def minBound: A
+}
+trait UpperBounded[A] {
+  def maxBound: A
 }
 #+END_SRC
-
-#+BEGIN_SRC scala
-scala> 10 |--> (2, 20)
-res: List[Int] = List(10, 12, 14, 16, 18, 20)
-
-scala> 'm' |-> 'u'
-res: List[Char] = List(m, n, o, p, q, r, s, t, u)
-#+END_SRC
-
-#+BEGIN_ASIDE
-~|-->~ is Scalaz's Lightsaber. This is the syntax of a Functional
-Programmer. Not as clumsy or random as =fromStepToL=. An elegant
-syntax... for a more civilised age.
-#+END_ASIDE
-
-We will discuss =EphemeralStream= in the next chapter, for now we just need to
-know that it is a potentially infinite data structure that avoids the memory
-retention problems in the stdlib =Stream=.
 
 Similarly to =Object.equals=, the concept of =.toString= on every =class= does
 not make sense in Java. We would like to enforce stringyness at compiletime and
 this is exactly what =Show= achieves:
 
 #+BEGIN_SRC scala
-trait Show[F] {
-  def show(f: F): Cord = ...
-  def shows(f: F): String = ...
+trait Show[T] {
+  def show(f: T): String = ...
 }
 #+END_SRC
 
-We will explore =Cord= in more detail in the chapter on data types, we need only
-know that it is an efficient data structure for storing and manipulating
-=String=.
+And =Hash= achieves the same thing for =.hashCode=
+
+#+BEGIN_SRC scala
+trait Hash[A] {
+  def hash(x: A): Int = ...
+}
+#+END_SRC
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** Mappable Things
 
 We're focusing on things that can be mapped over, or traversed, in
 some sense:
 
-#+BEGIN_SRC dot :file images/scalaz-mappable.png :exports results
+# [fontcolor=black,color=black];
+# [color=black];
+#+BEGIN_SRC dot :file images/cats-mappable.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Cobind;
-    Comonad;
-    Bind;
-    Contravariant;
+    Invariant;
+    InvariantSemigroupal;
+    InvariantSemigroupal -> Invariant;
+    Semigroupal;
+    InvariantSemigroupal -> Semigroupal;
+    InvariantMonoidal;
+    InvariantMonoidal -> InvariantSemigroupal;
+
     Functor [fontcolor=black,color=black];
-    InvariantFunctor;
-    Functor;
-    Divide;
-    Divisible;
+    Functor -> Invariant;
     Apply;
-    Align [fontcolor=black,color=black];
-    Applicative;
-    Foldable1 [fontcolor=black,color=black];
-    Foldable [fontcolor=black,color=black];
-    Traverse [fontcolor=black,color=black];
-    Traverse1 [fontcolor=black,color=black];
-    Monad;
-    "Advanced Monads" [style=dashed];
-    Plus;
-    PlusEmpty;
-    IsEmpty;
-    ApplicativePlus;
-    MonadPlus;
-
-    Cobind -> Functor;
-    Comonad -> Cobind;
-
-    Bind -> Apply;
-
-    Contravariant -> InvariantFunctor;
-    Functor -> InvariantFunctor;
-
-    Divide -> Contravariant;
-    Divisible -> Divide;
+    Apply -> InvariantSemigroupal;
     Apply -> Functor;
+    Applicative;
     Applicative -> Apply;
+    Applicative -> InvariantMonoidal;
+    FlatMap;
+    FlatMap -> Apply;
+    Monad;
+    Monad -> Applicative;
+    Monad -> FlatMap;
 
-    Align -> Functor [color=black];
-
-    Foldable1 -> Foldable [color=black];
+    UnorderedFoldable;
+    Foldable [fontcolor=black,color=black];
+    Foldable -> UnorderedFoldable;
+    Reducible [fontcolor=black,color=black];
+    Reducible -> Foldable [color=black];
+    UnorderedTraverse;
+    Traverse [fontcolor=black,color=black];
     Traverse -> Functor [color=black];
     Traverse -> Foldable [color=black];
-    Traverse1 -> Traverse [color=black];
-    Traverse1 -> Foldable1 [color=black];
+    Traverse -> UnorderedTraverse;
+    NonEmptyTraverse [fontcolor=black,color=black];
+    NonEmptyTraverse -> Traverse [color=black];
+    NonEmptyTraverse -> Reducible [color=black];
 
-    Monad -> Applicative;
-    "Advanced Monads" -> Monad;
-    Monad -> Bind;
+    Contravariant;
+    Contravariant -> Invariant;
+    ContravariantSemigroupal;
+    ContravariantSemigroupal -> InvariantSemigroupal;
+    ContravariantSemigroupal -> Contravariant;
+    ContravariantMonoidal;
+    ContravariantMonoidal -> InvariantMonoidal;
+    ContravariantMonoidal -> ContravariantSemigroupal;
 
-    PlusEmpty -> Plus;
-    IsEmpty -> PlusEmpty;
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
 
-    ApplicativePlus -> Applicative;
-    ApplicativePlus -> PlusEmpty;
-    MonadPlus -> ApplicativePlus;
-    MonadPlus -> Monad;
+    Distributive;
+    Distributive -> Functor;
+
+    SemigroupK;
+    MonoidK;
+    MonoidK -> SemigroupK;
+    Alternative;
+    Alternative -> Applicative;
+    Alternative -> MonoidK;
+
+    ApplicativeError;
+    ApplicativeError -> Applicative;
+    MonadError;
+    MonadError -> ApplicativeError;
+
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    StackSafeMonad;
+    StackSafeMonad -> Monad;
+
+    CommutativeApply;
+    CommutativeApply -> Apply;
+    CommutativeApplicative;
+    CommutativeApplicative -> Applicative;
+    CommutativeApplicative -> CommutativeApply;
+    CommutativeFlatMap;
+    CommutativeFlatMap -> FlatMap;
+    CommutativeFlatMap -> CommutativeApply;
+    CommutativeMonad;
+    CommutativeMonad -> Monad;
+    CommutativeMonad -> CommutativeFlatMap;
+    CommutativeMonad -> CommutativeApplicative;
 
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-mappable.png]]
+[[file:images/cats-mappable.png]]
 
 **** Functor
 
 #+BEGIN_SRC scala
 @typeclass trait Functor[F[_]] {
   def map[A, B](fa: F[A])(f: A => B): F[B]
-
-  def void[A](fa: F[A]): F[Unit] = map(fa)(_ => ())
-  def fproduct[A, B](fa: F[A])(f: A => B): F[(A, B)] = map(fa)(a => (a, f(a)))
-
-  def fpair[A](fa: F[A]): F[(A, A)] = map(fa)(a => (a, a))
-  def strengthL[A, B](a: A, f: F[B]): F[(A, B)] = map(f)(b => (a, b))
-  def strengthR[A, B](f: F[A], b: B): F[(A, B)] = map(f)(a => (a, b))
-
-  def lift[A, B](f: A => B): F[A] => F[B] = map(_)(f)
-  def mapply[A, B](a: A)(f: F[A => B]): F[B] = map(f)((ff: A => B) => ff(a))
+  ...
 }
 #+END_SRC
 
-The only abstract method is =map=, and it must /compose/, i.e. mapping
+The only abstract method is =.map=, and it must /compose/, i.e. mapping
 with =f= and then again with =g= is the same as mapping once with the
 composition of =f= and =g=:
 
@@ -3656,8 +3714,8 @@ composition of =f= and =g=:
 fa.map(f).map(g) == fa.map(f.andThen(g))
 #+END_SRC
 
-The =map= should also perform a no-op if the provided function is
-=identity= (i.e. =x => x=)
+The =.map= should also perform a no-op if the provided function is
+=identity= (i.e. ~x => x~)
 
 #+BEGIN_SRC scala
 fa.map(identity) == fa
@@ -3665,70 +3723,46 @@ fa.map(identity) == fa
 fa.map(x => x) == fa
 #+END_SRC
 
-=Functor= defines some convenience methods around =map= that can be optimised by
+=Functor= defines some convenience methods around =.map= that can be optimised by
 specific instances. The documentation has been intentionally omitted in the
 above definitions to encourage guessing what a method does before looking at the
 implementation. Please spend a moment studying only the type signature of the
 following before reading further:
 
 #+BEGIN_SRC scala
-  def void[A](fa: F[A]): F[Unit]
-  def fproduct[A, B](fa: F[A])(f: A => B): F[(A, B)]
+  def void[A](fa: F[A]): F[Unit] = ...
+  def fproduct[A, B](fa: F[A])(f: A => B): F[(A, B)] = ...
+  def as[A, B](fa: F[A], b: B): F[B] = ...
 
-  def fpair[A](fa: F[A]): F[(A, A)]
-  def strengthL[A, B](a: A, f: F[B]): F[(A, B)]
-  def strengthR[A, B](f: F[A], b: B): F[(A, B)]
+  def tupleLeft[A, B](fa: F[A], b: B): F[(B, A)] = ...
+  def tupleRight[A, B](fa: F[A], b: B): F[(A, B)] = ...
+  def unzip[A, B](fab: F[(A, B)]): (F[A], F[B]) = ...
 
   // harder
-  def lift[A, B](f: A => B): F[A] => F[B]
-  def mapply[A, B](a: A)(f: F[A => B]): F[B]
+  def lift[A, B](f: A => B): F[A] => F[B] = ...
 #+END_SRC
 
-1. =void= takes an instance of the =F[A]= and always returns an
+1. =.void= takes an instance of the =F[A]= and always returns an
    =F[Unit]=, it forgets all the values whilst preserving the
    structure.
-1. =fproduct= takes the same input as =map= but returns =F[(A, B)]=,
+1. =.fproduct= takes the same input as =map= but returns =F[(A, B)]=,
    i.e. it tuples the contents with the result of applying the
    function. This is useful when we wish to retain the input.
-1. =fpair= twins all the elements of =A= into a tuple =F[(A, A)]=
-1. =strengthL= pairs the contents of an =F[B]= with a constant =A= on
+1. =.as= ignores the content of the =F[A]= and replaces it with the =B=.
+1. =.tupleLeft= pairs the contents of an =F[A]= with a constant =B= on
    the left.
-1. =strengthR= pairs the contents of an =F[A]= with a constant =B= on
+1. =.tupleRight= pairs the contents of an =F[A]= with a constant =B= on
    the right.
-1. =lift= takes a function =A => B= and returns a =F[A] => F[B]=. In
-   other words, it takes a function over the contents of an =F[A]= and
-   returns a function that operates *on* the =F[A]= directly.
-1. =mapply= is a mind bender. Say we have an =F[_]= of functions =A
-   => B= and a value =A=, then we can get an =F[B]=. It has a similar
-   signature to =pure= but requires the caller to provide the =F[A =>
-   B]=.
+1. =.unzip= splits a functor of tuples into a tuple of functors.
+1. ~.lift~ takes a function ~A => B~ and returns a ~F[A] => F[B]~. In
+   other words, it takes a function over the contents of an ~F[A]~ and
+   returns a function that operates *on* the ~F[A]~ directly.
 
-=fpair=, =strengthL= and =strengthR= look pretty useless, but they are
-useful when we wish to retain some information that would otherwise be
-lost to scope.
-
-=Functor= has some special syntax:
-
-#+BEGIN_SRC scala
-implicit class FunctorOps[F[_]: Functor, A](self: F[A]) {
-  def as[B](b: =>B): F[B] = Functor[F].map(self)(_ => b)
-  def >|[B](b: =>B): F[B] = as(b)
-}
-#+END_SRC
-
-=.as= and =>|= are a way of replacing the output with a constant.
-
-#+BEGIN_ASIDE
-When Scalaz provides additional functionality as syntax, rather than on the
-typeclass itself, it is because of binary compatibility.
-
-When a =X.Y.0= version of Scalaz is released, it is not possible to add methods
-to typeclasses in that release series for Scala 2.10 and 2.11. It is therefore
-worth reading both the typeclass source and its syntax.
-#+END_ASIDE
+=.as=, =.tupleLeft= and =.tupleRight= are useful when we wish to retain some
+information that would otherwise be lost to scope.
 
 In our example application, as a nasty hack (which we didn't even
-admit to until now), we defined =start= and =stop= to return their
+admit to until now), we defined =.start= and =.stop= to return their
 input:
 
 #+BEGIN_SRC scala
@@ -3756,7 +3790,7 @@ for {
 #+END_SRC
 
 But this hack pushes unnecessary complexity into the implementations. It is
-better if we let our algebras return =F[Unit]= and use =as=:
+better if we let our algebras return =F[Unit]= and use =.as=:
 
 #+BEGIN_SRC scala
 m.start(node) as world.copy(pending = Map(node -> world.time))
@@ -3783,33 +3817,37 @@ beginning with the abstract methods:
 
 #+BEGIN_SRC scala
 @typeclass trait Foldable[F[_]] {
-  def foldMap[A, B: Monoid](fa: F[A])(f: A => B): B
-  def foldRight[A, B](fa: F[A], z: =>B)(f: (A, =>B) => B): B
-  def foldLeft[A, B](fa: F[A], z: B)(f: (B, A) => B): B = ...
+  def foldLeft[A, B](fa: F[A], b: B)(f: (B, A) => B): B
+  def foldRight[A, B](fa: F[A], lb: Eval[B])(f: (A, Eval[B]) => Eval[B]): Eval[B]
+
+  def foldMap[A, B: Monoid](fa: F[A])(f: A => B): B = ...
 #+END_SRC
 
-An instance of =Foldable= need only implement =foldMap= and
-=foldRight= to get all of the functionality in this typeclass,
-although methods are typically optimised for specific data structures.
+We encountered =Eval= in the previous chapter, as a mechanism to control
+evaluation.
+
+An instance of =Foldable= need only implement =.foldLeft= and =.foldRight= to
+get all of the functionality in this typeclass, although methods are typically
+optimised for specific data structures.
 
 =.foldMap= has a marketing buzzword name: *MapReduce*. Given an =F[A]=, a
 function from =A= to =B=, and a way to combine =B= (provided by the =Monoid=,
 along with a zero =B=), we can produce a summary value of type =B=. There is no
 enforced operation order, allowing for parallel computation.
 
-=foldRight= does not require its parameters to have a =Monoid=,
-meaning that it needs a starting value =z= and a way to combine each
-element of the data structure with the summary value. The order for
-traversing the elements is from right to left and therefore it cannot
-be parallelised.
+Noeither =.foldLeft= nor =.foldRight= require their parameters to have a
+=Monoid=, meaning that they need a starting value =b= and a way to combine each
+element of the data structure with the summary value. The order for traversing
+the elements is defined (=.foldLeft= goes from left to right, =.foldRight= goes
+from right to left) and therefore cannot be parallelised.
 
 #+BEGIN_ASIDE
 
-=foldRight= is conceptually the same as the =foldRight= in the Scala
-stdlib. However, there is a problem with the stdlib =foldRight=
-signature, solved in Scalaz: very large data structures can stack
-overflow. =List.foldRight= cheats by implementing =foldRight= as a
-reversed =foldLeft=
+=.foldRight= is conceptually the same as the =.foldRight= in the Scala
+stdlib. However, there is a problem with the stdlib =.foldRight=
+signature, solved in Cats: very large data structures can stack
+overflow. =List.foldRight= implements =.foldRight= as a
+reversed =.foldLeft=
 
 #+BEGIN_SRC scala
 override def foldRight[B](z: B)(op: (A, B) => B): B =
@@ -6079,101 +6117,6 @@ the name for what we know as =scalaz.Monad=. Not a God, just a mere
 mortal.
 #+END_ASIDE
 
-*** Evaluation
-
-Java is a /strict/ evaluation language: all the parameters to a method
-must be evaluated to a /value/ before the method is called. Scala
-introduces the notion of /by-name/ parameters on methods with ~a: =>A~
-syntax. These parameters are wrapped up as a zero argument function
-which is called every time the =a= is referenced. We seen /by-name/ a
-lot in the typeclasses.
-
-Scala also has /by-need/ evaluation of values, with the =lazy=
-keyword: the computation is evaluated at most once to produce the
-value. Unfortunately, Scala does not support /by-need/ evaluation of
-method parameters.
-
-#+BEGIN_ASIDE
-If the calculation of a =lazy val= throws an exception, it is retried
-every time it is accessed. Because exceptions can break referential
-transparency, we limit our discussion to =lazy val= calculations that
-do not throw exceptions.
-#+END_ASIDE
-
-Scalaz formalises the three evaluation strategies with an ADT
-
-#+BEGIN_SRC scala
-sealed abstract class Name[A] {
-  def value: A
-}
-object Name {
-  def apply[A](a: =>A) = new Name[A] { def value = a }
-  ...
-}
-
-sealed abstract class Need[A] extends Name[A]
-object Need {
-  def apply[A](a: =>A): Need[A] = new Need[A] {
-    private lazy val value0: A = a
-    def value = value0
-  }
-  ...
-}
-
-final case class Value[A](value: A) extends Need[A]
-#+END_SRC
-
-The weakest form of evaluation is =Name=, giving no computational
-guarantees. Next is =Need=, guaranteeing /at most once/ evaluation,
-whereas =Value= is pre-computed and therefore /exactly once/
-evaluation.
-
-If we wanted to be super-pedantic we could go back to all the
-typeclasses and make their methods take =Name=, =Need= or =Value=
-parameters. Instead we can assume that normal parameters can always be
-wrapped in a =Value=, and /by-name/ parameters can be wrapped with
-=Name=.
-
-When we write /pure programs/, we are free to replace any =Name= with
-=Need= or =Value=, and vice versa, with no change to the correctness
-of the program. This is the essence of /referential transparency/: the
-ability to replace a computation by its value, or a value by its
-computation.
-
-In functional programming we almost always want =Value= or =Need=
-(also known as /strict/ and /lazy/): there is little value in =Name=.
-Because there is no language level support for lazy method parameters,
-methods typically ask for a /by-name/ parameter and then convert it
-into a =Need= internally, getting a boost to performance.
-
-#+BEGIN_ASIDE
-=Lazy= (with a capital =L=) is often used in core Scala libraries for
-data types with /by-name/ semantics: a misnomer that has stuck.
-
-More generally, we're all pretty lazy about how we talk about laziness: it can
-be good to seek clarification about what kind of laziness is being discussed. Or
-don't. Because, lazy.
-#+END_ASIDE
-
-=Name= provides instances of the following typeclasses
-
-- =Monad=
-- =Comonad=
-- =Traverse1=
-- =Align=
-- =Zip= / =Unzip= / =Cozip=
-
-#+BEGIN_ASIDE
-/by-name/ and /lazy/ are not the free lunch they appear to be. When
-Scala converts /by-name/ parameters and =lazy val= into bytecode,
-there is an object allocation overhead.
-
-Before rewriting everything to use /by-name/ parameters, ensure that
-the cost of the overhead does not eclipse the saving. There is no
-benefit unless there is the possibility of *not* evaluating. High
-performance code that runs in a tight loop and always evaluates will
-suffer.
-#+END_ASIDE
 
 *** Memoisation
 
