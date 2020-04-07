@@ -76,9 +76,7 @@ needed).
 A `map` over the `b` introduces the `ij` which is flat-mapped along
 with the `j`, then the final `map` for the code in the `yield`.
 
-Unfortunately we cannot assign before any generators. It has been
-requested as a language feature but has not been implemented:
-<https://github.com/scala/bug/issues/907>
+Unfortunately we cannot assign before any generators.
 
 {lang="text"}
 ~~~~~~~~
@@ -184,19 +182,6 @@ Like assignment, a generator can use a pattern match on the left hand side. But
 unlike assignment (which throws `MatchError` on failure), generators are
 *filtered* and will not fail at runtime. However, there is an inefficient double
 application of the pattern.
-
-A> The compiler plugin [`better-monadic-for`](https://github.com/oleg-py/better-monadic-for) produces alternative, **better**,
-A> desugarings than the Scala compiler. This example is interpreted as:
-A> 
-A> {lang="text"}
-A> ~~~~~~~~
-A>   reify> for { i: Int <- a } yield i
-A>   
-A>   a.map { (i: Int) => i}
-A> ~~~~~~~~
-A> 
-A> instead of inefficient double matching (in the best case) and silent filtering
-A> at runtime (in the worst case). Highly recommended.
 
 
 ### For Each
@@ -2683,3 +2668,68 @@ Now we can write an OAuth2 client module:
     convenient syntax for typeclass functions.
 -   *typeclass derivation* is compiletime composition of typeclass
     instances.
+
+
+# Cats Typeclasses
+
+In this chapter we will tour most of the typeclasses in Cats.
+We don't use everything in `drone-dynamic-agents` so we will give
+standalone examples when appropriate.
+
+Before we introduce the typeclass hierarchy, we will peek at the four
+most important methods from a control flow perspective: the methods we
+will use the most in typical FP applications:
+
+| Typeclass     | Method     | From      | Given       | To        |
+|------------- |---------- |--------- |----------- |--------- |
+| `Functor`     | `map`      | `F[A]`    | `A => B`    | `F[B]`    |
+| `Applicative` | `pure`     | `A`       |             | `F[A]`    |
+| `Monad`       | `flatMap`  | `F[A]`    | `A => F[B]` | `F[B]`    |
+| `Traverse`    | `sequence` | `F[G[A]]` |             | `G[F[A]]` |
+
+We know that operations which return a `F[_]` can be run sequentially
+in a `for` comprehension by `.flatMap`, defined on its `Monad[F]`. The
+context `F[_]` can be thought of as a container for an intentional
+*effect* with `A` as the output: `.flatMap` allows us to generate new
+effects `F[B]` at runtime based on the results of evaluating previous
+effects.
+
+Of course, not all type constructors `F[_]` are effectful, even if
+they have a `Monad[F]`. Often they are data structures. By using the
+least specific abstraction, we can reuse code for `List`, `Either`,
+`Future` and more.
+
+If we only need to transform the output from an `F[_]`, that is just `.map`,
+introduced by `Functor`. In Chapter 3, we ran effects in parallel with `.mapN`.
+In Functional Programming, parallelisable computations are considered **less**
+powerful than sequential ones.
+
+In between `Monad` and `Functor` is `Applicative`, defining `.pure`
+that lets us lift a value into an effect, or create a data structure
+from a single value.
+
+`.sequence` is useful for rearranging type constructors. If we have an `F[G[_]]`
+but need a `G[F[_]]`, e.g. `List[Future[Int]]` but need a `Future[List[Int]]`,
+that is `.sequence`.
+
+
+## Agenda
+
+This chapter is longer than usual and jam-packed with information: it is
+perfectly reasonable to read it over several sittings. Remembering everything
+would require super-human powers, so treat this chapter as a way of knowing
+where to look for more information.
+
+Notably absent are many typeclasses that extend `Monad`. They get their own
+chapter later.
+
+{width=100%}
+![](images/cats-core-tree.png)
+
+{width=60%}
+![](images/cats-core-cliques.png)
+
+{width=40%}
+![](images/cats-core-loners.png)
+
+

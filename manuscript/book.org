@@ -30,10 +30,10 @@ will later discredit: similar to how we learn Newton's theory of gravity as
 children, and progress to Riemann / Einstein / Maxwell if we become students of
 physics.
 
-A computer is not necessary to follow along, but studying the cats source code
+A computer is not necessary to follow along, but studying the Cats source code
 is encouraged. Some of the more complex code snippets are available with [[https://github.com/turt13/fpmortals-cats/][the
 book's source code]] and those who want practical exercises are encouraged to
-(re-)implement cats (and the example application) using the partial descriptions
+(re-)implement Cats (and the example application) using the partial descriptions
 presented in this book.
 
 ** Copyright Notice
@@ -75,7 +75,7 @@ section. Unless told otherwise, assume that all snippets have the
 following imports:
 
 #+BEGIN_SRC scala
-import cats._, cats.implicits._, cats.data._
+import cats._, cats.data._, cats.implicits._
 import simulacrum._
 #+END_SRC
 
@@ -2998,17 +2998,11 @@ class OAuth2Client[F[_]: Monad](
 - /typeclass derivation/ is compiletime composition of typeclass
   instances.
 
-** Scalaz Typeclasses
+** Cats Typeclasses
 
-In this chapter we will tour most of the typeclasses in =scalaz-core=.
+In this chapter we will tour most of the typeclasses in Cats.
 We don't use everything in =drone-dynamic-agents= so we will give
 standalone examples when appropriate.
-
-There has been criticism of the naming in Scalaz, and functional programming in
-general. Most names follow the conventions introduced in the Haskell programming
-language, based on /Category Theory/. Feel free to set up =type= aliases if
-verbs based on the primary functionality are easier to remember when learning
-(e.g. =Mappable=, =Pureable=, =FlatMappable=).
 
 Before we introduce the typeclass hierarchy, we will peek at the four
 most important methods from a control flow perspective: the methods we
@@ -3024,7 +3018,7 @@ will use the most in typical FP applications:
 We know that operations which return a =F[_]= can be run sequentially
 in a =for= comprehension by =.flatMap=, defined on its =Monad[F]=. The
 context =F[_]= can be thought of as a container for an intentional
-/effect/ with =A= as the output: =flatMap= allows us to generate new
+/effect/ with =A= as the output: =.flatMap= allows us to generate new
 effects =F[B]= at runtime based on the results of evaluating previous
 effects.
 
@@ -3033,13 +3027,12 @@ they have a =Monad[F]=. Often they are data structures. By using the
 least specific abstraction, we can reuse code for =List=, =Either=,
 =Future= and more.
 
-If we only need to transform the output from an =F[_]=, that is just
-=map=, introduced by =Functor=. In Chapter 3, we ran effects in
-parallel by creating a product and mapping over them. In Functional
-Programming, parallelisable computations are considered *less*
+If we only need to transform the output from an =F[_]=, that is just =.map=,
+introduced by =Functor=. In Chapter 3, we ran effects in parallel with =.mapN=.
+In Functional Programming, parallelisable computations are considered *less*
 powerful than sequential ones.
 
-In between =Monad= and =Functor= is =Applicative=, defining =pure=
+In between =Monad= and =Functor= is =Applicative=, defining =.pure=
 that lets us lift a value into an effect, or create a data structure
 from a single value.
 
@@ -3050,126 +3043,181 @@ that is =.sequence=.
 *** Agenda
 
 This chapter is longer than usual and jam-packed with information: it is
-perfectly reasonable to attack it over several sittings. Remembering everything
+perfectly reasonable to read it over several sittings. Remembering everything
 would require super-human powers, so treat this chapter as a way of knowing
 where to look for more information.
 
-Notably absent are typeclasses that extend =Monad=. They get their own chapter
-later.
+Notably absent are many typeclasses that extend =Monad=. They get their own
+chapter later.
 
-Scalaz uses code generation, not simulacrum. However, for brevity, we present
-code snippets with =@typeclass=. Equivalent syntax is available when we =import
-scalaz._, Scalaz._= and is available under the =scalaz.syntax= package in the
-scalaz source code.
-
-#+BEGIN_SRC dot :file images/scalaz-core-tree.png :exports results
+#+BEGIN_SRC dot :file images/cats-core-tree.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
 
-    Cobind;
-    Comonad;
-    Bind;
-    Contravariant;
+    Invariant;
+    InvariantSemigroupal;
+    InvariantSemigroupal -> Invariant;
+    Semigroupal;
+    InvariantSemigroupal -> Semigroupal;
+    InvariantMonoidal;
+    InvariantMonoidal -> InvariantSemigroupal;
+
     Functor;
-    InvariantFunctor;
-    Functor;
-    Divide;
-    Divisible;
+    Functor -> Invariant;
     Apply;
-    Align;
-    Applicative;
-    Foldable1;
-    Foldable;
-    Traverse;
-    Traverse1;
-    Monad;
-    "Advanced Monads" [style=dashed];
-    Plus;
-    PlusEmpty;
-    IsEmpty;
-    ApplicativePlus;
-    MonadPlus;
-
-    Cobind -> Functor;
-    Comonad -> Cobind;
-
-    Bind -> Apply;
-
-    Contravariant -> InvariantFunctor;
-    Functor -> InvariantFunctor;
-
-    Divide -> Contravariant;
-    Divisible -> Divide;
+    Apply -> InvariantSemigroupal;
     Apply -> Functor;
+    Applicative;
     Applicative -> Apply;
+    Applicative -> InvariantMonoidal;
+    FlatMap;
+    FlatMap -> Apply;
+    Monad;
+    Monad -> Applicative;
+    Monad -> FlatMap;
 
-    Foldable1 -> Foldable;
+    UnorderedFoldable;
+    Foldable;
+    Foldable -> UnorderedFoldable;
+    Reducible;
+    Reducible -> Foldable;
+    UnorderedTraverse;
+    Traverse;
     Traverse -> Functor;
     Traverse -> Foldable;
-    Traverse1 -> Traverse;
-    Traverse1 -> Foldable1;
+    Traverse -> UnorderedTraverse;
+    NonEmptyTraverse;
+    NonEmptyTraverse -> Traverse;
+    NonEmptyTraverse -> Reducible;
 
-    Align -> Functor;
+    Contravariant;
+    Contravariant -> Invariant;
+    ContravariantSemigroupal;
+    ContravariantSemigroupal -> InvariantSemigroupal;
+    ContravariantSemigroupal -> Contravariant;
+    ContravariantMonoidal;
+    ContravariantMonoidal -> InvariantMonoidal;
+    ContravariantMonoidal -> ContravariantSemigroupal;
 
-    Monad -> Applicative;
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
 
-    "Advanced Monads" [style=dashed];
-    "Advanced Monads" -> Monad;
+    Distributive;
+    Distributive -> Functor;
 
-    Monad -> Bind;
+    SemigroupK;
+    MonoidK;
+    MonoidK -> SemigroupK;
+    Alternative;
+    Alternative -> Applicative;
+    Alternative -> MonoidK;
 
-    PlusEmpty -> Plus;
-    IsEmpty -> PlusEmpty;
+    ApplicativeError;
+    ApplicativeError -> Applicative;
+    MonadError;
+    MonadError -> ApplicativeError;
 
-    ApplicativePlus -> Applicative;
-    ApplicativePlus -> PlusEmpty;
-    MonadPlus -> ApplicativePlus;
-    MonadPlus -> Monad;
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    StackSafeMonad;
+    StackSafeMonad -> Monad;
+
+    CommutativeApply;
+    CommutativeApply -> Apply;
+    CommutativeApplicative;
+    CommutativeApplicative -> Applicative;
+    CommutativeApplicative -> CommutativeApply;
+    CommutativeFlatMap;
+    CommutativeFlatMap -> FlatMap;
+    CommutativeFlatMap -> CommutativeApply;
+    CommutativeMonad;
+    CommutativeMonad -> Monad;
+    CommutativeMonad -> CommutativeFlatMap;
+    CommutativeMonad -> CommutativeApplicative;
 
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-core-tree.png]]
+[[file:images/cats-core-tree.png]]
 
-#+BEGIN_SRC dot :file images/scalaz-core-cliques.png :exports results
+#+BEGIN_SRC dot :file images/cats-core-cliques.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
 
-    Monoid -> Semigroup;
+    Semigroup;
+    Band;
     Band -> Semigroup;
+    Monoid;
+    Monoid -> Semigroup;
+    Group;
+    Group -> Monoid;
+    CommutativeSemigroup;
+    CommutativeSemigroup -> Semigroup;
+    Semilattice;
+    Semilattice -> Band;
+    Semilattice -> CommutativeSemigroup;
+    CommutativeMonoid;
+    CommutativeMonoid -> Monoid;
+    BoundedSemilattice;
+    BoundedSemilattice -> Semilattice;
+    BoundedSemilattice -> CommutativeMonoid;
+    CommutativeGroup;
+    CommutativeGroup -> Group;
+    CommutativeGroup -> CommutativeMonoid;
 
-    Order -> Equal;
-    Enum -> Order;
+    Eq;
+    PartialOrder;
+    PartialOrder -> Eq;
+    Order -> PartialOrder;
 
+    FunctorFilter;
+    TraverseFilter;
+    TraverseFilter -> FunctorFilter;
+
+    Bifunctor;
+    Bifoldable;
     Bitraverse -> Bifunctor;
     Bitraverse -> Bifoldable;
+
 }
 #+END_SRC
 
 #+CAPTION: 60
 #+RESULTS:
-[[file:images/scalaz-core-cliques.png]]
+[[file:images/cats-core-cliques.png]]
 
-#+BEGIN_SRC dot :file images/scalaz-core-loners.png :exports results
+#+BEGIN_SRC dot :file images/cats-core-loners.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
 
-    Zip;
-    Unzip;
-    Cozip;
+    Hash;
     Show;
-    Optional;
+    Align;
+
+    NonEmptyParallel;
+    Parallel;
+    Parallel -> NonEmptyParallel;
+
 }
 #+END_SRC
 
-#+CAPTION: 60
+#+CAPTION: 40
 #+RESULTS:
-[[file:images/scalaz-core-loners.png]]
+[[file:images/cats-core-loners.png]]
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** Appendable Things
 
@@ -16331,11 +16379,11 @@ Get involved with Scalaz by joining the [[https://gitter.im/scalaz/scalaz][gitte
 for advice, help newcomers (you're an expert now), and contribute to the next
 release.
 
-* Backmatter                                                          :final:
-:PROPERTIES:
-:EXPORT_FILE_NAME: backmatter.md
-:END:
-{backmatter}
+# * Backmatter                                                          :final:
+# :PROPERTIES:
+# :EXPORT_FILE_NAME: backmatter.md
+# :END:
+# {backmatter}
 
 ** Typeclass Cheatsheet
 

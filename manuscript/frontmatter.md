@@ -18,10 +18,10 @@ will later discredit: similar to how we learn Newton's theory of gravity as
 children, and progress to Riemann / Einstein / Maxwell if we become students of
 physics.
 
-A computer is not necessary to follow along, but studying the cats source code
+A computer is not necessary to follow along, but studying the Cats source code
 is encouraged. Some of the more complex code snippets are available with [the
 book's source code](https://github.com/turt13/fpmortals-cats/) and those who want practical exercises are encouraged to
-(re-)implement cats (and the example application) using the partial descriptions
+(re-)implement Cats (and the example application) using the partial descriptions
 presented in this book.
 
 
@@ -67,7 +67,7 @@ following imports:
 
 {lang="text"}
 ~~~~~~~~
-  import cats._, cats.implicits._, cats.data._
+  import cats._, cats.data._, cats.implicits._
   import simulacrum._
 ~~~~~~~~
 
