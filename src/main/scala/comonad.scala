@@ -2,32 +2,30 @@
 // License: https://firstdonoharm.dev/version/2/1/license.html
 package comonad
 
-import scalaz._
-import Scalaz._
-import Maybe.{ Empty, Just }
+import cats._, data._, implicits._
 
 // http://blog.sigfpe.com/2006/12/evaluating-cellular-automata-is.html
-final case class Hood[A](lefts: IList[A], focus: A, rights: IList[A])
+final case class Hood[A](lefts: List[A], focus: A, rights: List[A])
 
 object Hood {
   implicit class Ops[A](hood: Hood[A]) {
-    def toList: IList[A] = hood.lefts.reverse ::: hood.focus :: hood.rights
+    def toList: List[A] = hood.lefts.reverse ::: hood.focus :: hood.rights
 
-    def previous: Maybe[Hood[A]] = hood.lefts match {
-      case INil() => Empty()
-      case ICons(head, tail) =>
-        Just(Hood(tail, head, hood.focus :: hood.rights))
+    def previous: Option[Hood[A]] = hood.lefts match {
+      case Nil => None
+      case head :: tail =>
+        Some(Hood(tail, head, hood.focus :: hood.rights))
     }
-    def next: Maybe[Hood[A]] = hood.rights match {
-      case INil() => Empty()
-      case ICons(head, tail) =>
-        Just(Hood(hood.focus :: hood.lefts, head, tail))
+    def next: Option[Hood[A]] = hood.rights match {
+      case Nil => None
+      case head :: tail =>
+        Some(Hood(hood.focus :: hood.lefts, head, tail))
     }
 
-    def iterate(f: Hood[A] => Maybe[Hood[A]]): IList[Hood[A]] =
+    def iterate(f: Hood[A] => Option[Hood[A]]): List[Hood[A]] =
       f(hood) match {
-        case Empty() => INil()
-        case Just(r) => ICons(r, r.iterate(f))
+        case None => Nil
+        case Some(r) => r :: r.iterate(f)
       }
     def positions: Hood[Hood[A]] = {
       val left  = hood.iterate(_.previous)
@@ -43,18 +41,18 @@ object Hood {
     // uncomment for performance
     //override def cojoin[A](fa: Hood[A]): Hood[Hood[A]] = fa.positions
 
-    def cobind[A, B](fa: Hood[A])(f: Hood[A] => B): Hood[B] =
+    def coflatMap[A, B](fa: Hood[A])(f: Hood[A] => B): Hood[B] =
       fa.positions.map(f)
-    def copoint[A](fa: Hood[A]): A = fa.focus
+    def extract[A](fa: Hood[A]): A = fa.focus
   }
 }
 
 object example {
   def main(args: Array[String]): Unit = {
 
-    val middle = Hood(IList(4, 3, 2, 1), 5, IList(6, 7, 8, 9))
+    val middle = Hood(List(4, 3, 2, 1), 5, List(6, 7, 8, 9))
 
-    println(middle.cojoin)
+    println(middle.coflatten)
 
     /*
      Hood(

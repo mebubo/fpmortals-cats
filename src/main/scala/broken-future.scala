@@ -4,7 +4,7 @@ package brokenfuture
 
 import scala.io.StdIn
 
-import scalaz._, Scalaz._
+import cats._, implicits._
 
 import scala.concurrent._
 import scala.concurrent.duration.Duration
