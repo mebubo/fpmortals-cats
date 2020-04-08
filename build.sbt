@@ -21,3 +21,6 @@ libraryDependencies ++= Seq(
 addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.11.0" cross CrossVersion.full)
 
 scalacOptions in (Compile, console) -= "-Xfatal-warnings"
+initialCommands in (Compile, console) := Seq(
+  "cats._, cats.implicits._, cats.data._"
+).mkString("import ", ",", "")

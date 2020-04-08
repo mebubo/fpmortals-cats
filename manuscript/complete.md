@@ -1699,6 +1699,70 @@ may be managing state, throwing exceptions, or providing adhoc method
 implementations.
 
 
+### Example: Evaluation
+
+Java is a *strict* evaluation language: all the parameters to a method
+must be evaluated to a *value* before the method is called. Scala
+introduces the notion of *by-name* parameters on methods with `a: =>A`
+syntax. These parameters are wrapped up as a zero argument function
+which is called every time the `a` is referenced.
+
+Scala also has *by-need* evaluation of values, with the `lazy`
+keyword: the computation is evaluated at most once to produce the
+value. Unfortunately, Scala does not support *by-need* evaluation of
+method parameters.
+
+A> If the calculation of a `lazy val` throws an exception, it is retried
+A> every time it is accessed. Because exceptions can break referential
+A> transparency, we limit our discussion to `lazy val` calculations that
+A> do not throw exceptions.
+
+Cats formalises the three evaluation strategies with an ADT called `Eval`. The
+following is a simplified version of the implementation:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Eval[A] {
+    def value: A
+  }
+  object Eval {
+    def always(a: =>A): Eval[A] = Always(() => a)
+    def later(a: =>A): Eval[A] = Later(() => a)
+    def now(a: A): Eval[A] = Now(a)
+  }
+  final case class Always[A](f: () => A) extends Eval[A] {
+    def value: A = f()
+  }
+  final case class Later[A](f: () => A)  extends Eval[A] {
+    lazy val value: A = f
+  }
+  final case class Now[A](value: A)      extends Eval[A]
+~~~~~~~~
+
+The weakest form of evaluation is `Always`, giving no computational
+guarantees. Next is `Later`, guaranteeing *at most once* evaluation,
+whereas `Now` is pre-computed and therefore *exactly once*
+evaluation.
+
+When we write *pure programs*, we are free to replace any `Always` with
+`Later` or `Now`, and vice versa, with no change to the correctness
+of the program. This is the essence of *referential transparency*: the
+ability to replace a computation by its value, or a value by its
+computation.
+
+In functional programming we almost always want `Now` or `Later`
+(also known as *strict* and *lazy*): there is little value in `Always`.
+
+A> *by-name* and *lazy* are not the free lunch they appear to be. When
+A> Scala converts *by-name* parameters and `lazy val` into bytecode,
+A> there is an object allocation overhead.
+A> 
+A> Before rewriting anything to use *by-name* parameters, or *lazy val* fields,
+A> ensure that the cost of the overhead does not eclipse the saving. There is no
+A> benefit unless there is the possibility of **not** evaluating. High performance
+A> code that runs in a tight loop and always evaluates will suffer.
+
+
 ## Functionality
 
 Pure functions are typically defined as methods on an `object`.
@@ -2756,7 +2820,7 @@ chapter later.
   @typeclass trait Group[A] extends Monoid[A] {
     def inverse(a: A): A
   
-    def remove(a: A, b: A): A = combine(a, inverse(b))
+    @op("|-|") def remove(a: A, b: A): A = combine(a, inverse(b))
   }
 ~~~~~~~~
 
@@ -2932,7 +2996,7 @@ concept of equality is captured at compiletime.
 ~~~~~~~~
   @typeclass trait Equal[F]  {
     @op("===") def eqv(x: A, y: A): Boolean
-    @op("!==") def neqv(x: A, y: A): Boolean = !eqv(x, y)
+    @op("=!=") def neqv(x: A, y: A): Boolean = !eqv(x, y)
   }
 ~~~~~~~~
 
@@ -3015,5 +3079,393 @@ And `Hash` achieves the same thing for `.hashCode`
     def hash(x: A): Int = ...
   }
 ~~~~~~~~
+
+
+## Mappable Things
+
+We're focusing on things that can be mapped over, or traversed, in
+some sense:
+
+{width=100%}
+![](images/cats-mappable.png)
+
+
+### Functor
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Functor[F[_]] {
+    def map[A, B](fa: F[A])(f: A => B): F[B]
+    ...
+  }
+~~~~~~~~
+
+The only abstract method is `.map`, and it must *compose*, i.e. mapping
+with `f` and then again with `g` is the same as mapping once with the
+composition of `f` and `g`:
+
+{lang="text"}
+~~~~~~~~
+  fa.map(f).map(g) == fa.map(f.andThen(g))
+~~~~~~~~
+
+The `.map` should also perform a no-op if the provided function is
+`identity` (i.e. `x => x`)
+
+{lang="text"}
+~~~~~~~~
+  fa.map(identity) == fa
+  
+  fa.map(x => x) == fa
+~~~~~~~~
+
+`Functor` defines some convenience methods around `.map` that can be optimised by
+specific instances. The documentation has been intentionally omitted in the
+above definitions to encourage guessing what a method does before looking at the
+implementation. Please spend a moment studying only the type signature of the
+following before reading further:
+
+{lang="text"}
+~~~~~~~~
+  def void[A](fa: F[A]): F[Unit] = ...
+  def fproduct[A, B](fa: F[A])(f: A => B): F[(A, B)] = ...
+  def as[A, B](fa: F[A], b: B): F[B] = ...
+  
+  def tupleLeft[A, B](fa: F[A], b: B): F[(B, A)] = ...
+  def tupleRight[A, B](fa: F[A], b: B): F[(A, B)] = ...
+  def unzip[A, B](fab: F[(A, B)]): (F[A], F[B]) = ...
+  
+  // harder
+  def lift[A, B](f: A => B): F[A] => F[B] = ...
+~~~~~~~~
+
+1.  `.void` takes an instance of the `F[A]` and always returns an
+    `F[Unit]`, it forgets all the values whilst preserving the
+    structure.
+2.  `.fproduct` takes the same input as `map` but returns `F[(A, B)]`,
+    i.e. it tuples the contents with the result of applying the
+    function. This is useful when we wish to retain the input.
+3.  `.as` ignores the content of the `F[A]` and replaces it with the `B`.
+4.  `.tupleLeft` pairs the contents of an `F[A]` with a constant `B` on
+    the left.
+5.  `.tupleRight` pairs the contents of an `F[A]` with a constant `B` on
+    the right.
+6.  `.unzip` splits a functor of tuples into a tuple of functors.
+7.  `.lift` takes a function `A => B` and returns a `F[A] => F[B]`. In
+    other words, it takes a function over the contents of an `F[A]` and
+    returns a function that operates **on** the `F[A]` directly.
+
+`.as`, `.tupleLeft` and `.tupleRight` are useful when we wish to retain some
+information that would otherwise be lost to scope.
+
+In our example application, as a nasty hack (which we didn't even
+admit to until now), we defined `.start` and `.stop` to return their
+input:
+
+{lang="text"}
+~~~~~~~~
+  def start(node: MachineNode): F[MachineNode]
+  def stop (node: MachineNode): F[MachineNode]
+~~~~~~~~
+
+This allowed us to write terse business logic such as
+
+{lang="text"}
+~~~~~~~~
+  for {
+    _      <- m.start(node)
+    update = world.copy(pending = Map(node -> world.time))
+  } yield update
+~~~~~~~~
+
+and
+
+{lang="text"}
+~~~~~~~~
+  for {
+    stopped <- nodes.traverse(m.stop)
+    updates = stopped.map(_ -> world.time).toList.toMap
+    update  = world.copy(pending = world.pending ++ updates)
+  } yield update
+~~~~~~~~
+
+But this hack pushes unnecessary complexity into the implementations. It is
+better if we let our algebras return `F[Unit]` and use `.as`:
+
+{lang="text"}
+~~~~~~~~
+  m.start(node) as world.copy(pending = Map(node -> world.time))
+~~~~~~~~
+
+and
+
+{lang="text"}
+~~~~~~~~
+  for {
+    stopped <- nodes.traverse(a => m.stop(a) as a)
+    updates = stopped.map(_ -> world.time).toList.toMap
+    update  = world.copy(pending = world.pending ++ updates)
+  } yield update
+~~~~~~~~
+
+
+### Foldable
+
+Technically, `Foldable` is for data structures that can be walked to produce a
+summary value. However, this undersells the fact that it is a one-typeclass army
+that can provide most of what we would expect to see in a Collections API.
+
+There are so many methods we are going to have to split them out,
+beginning with the abstract methods:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Foldable[F[_]] {
+    def foldLeft[A, B](fa: F[A], b: B)(f: (B, A) => B): B
+    def foldRight[A, B](fa: F[A], lb: Eval[B])(f: (A, Eval[B]) => Eval[B]): Eval[B]
+  
+    def foldMap[A, B: Monoid](fa: F[A])(f: A => B): B = ...
+~~~~~~~~
+
+We encountered `Eval` in the previous chapter, as a mechanism to control
+evaluation.
+
+An instance of `Foldable` need only implement `.foldLeft` and `.foldRight` to
+get all of the functionality in this typeclass, although methods are typically
+optimised for specific data structures.
+
+`.foldMap` has a marketing buzzword name: **MapReduce**. Given an `F[A]`, a
+function from `A` to `B`, and a way to combine `B` (provided by the `Monoid`,
+along with a zero `B`), we can produce a summary value of type `B`. There is no
+enforced operation order, allowing for parallel computation.
+
+Noeither `.foldLeft` nor `.foldRight` require their parameters to have a
+`Monoid`, meaning that they need a starting value `b` and a way to combine each
+element of the data structure with the summary value. The order for traversing
+the elements is defined (`.foldLeft` goes from left to right, `.foldRight` goes
+from right to left) and therefore cannot be parallelised.
+
+A> `.foldRight` is conceptually the same as the `.foldRight` in the Scala
+A> stdlib. However, there is a problem with the stdlib `.foldRight`
+A> signature, solved in Cats: very large data structures can stack
+A> overflow. `List.foldRight` implements `.foldRight` as a
+A> reversed `.foldLeft`
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   override def foldRight[B](z: B)(op: (A, B) => B): B =
+A>     reverse.foldLeft(z)((right, left) => op(left, right))
+A> ~~~~~~~~
+A> 
+A> but the concept of reversing is not universal and this workaround cannot be used
+A> for all data structures. Say we want to find a small number in a `Stream`, with
+A> an early exit:
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   scala> def isSmall(i: Int): Boolean = i < 10
+A>   scala> (1 until 100000).toStream.foldRight(false) {
+A>            (el, acc) => isSmall(el) || acc
+A>          }
+A>   java.lang.StackOverflowError
+A>     at scala.collection.Iterator.toStream(Iterator.scala:1403)
+A>     ...
+A> ~~~~~~~~
+A> 
+A> Cats solves the problem by allowing us to specify the evaluation strategy for
+A> the aggregate value.
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   scala> Foldable[Stream].foldRight((1 until 100000).toStream, Eval.now(false)){
+A>            (el, acc) => Eval.later(isSmall(el) || acc.value)
+A>          }.value
+A>   res: Boolean = true
+A> ~~~~~~~~
+A> 
+A> which means that the `acc` is not evaluated unless it is needed.
+A> 
+A> Beware that we must explicitly invoke the Cats `Foldable.foldRight`, otherwise
+A> we will get the standard library implementation and the `StackOverflowError`
+A> returns.
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   scala> (1 until 100000).toStream.foldRight(Eval.now(false)){
+A>            (el, acc) => Eval.later(isSmall(el) || acc.value)
+A>          }.value
+A>   java.lang.StackOverflowError
+A> ~~~~~~~~
+A> 
+A> It is worth baring in mind that not all operations are stack safe in
+A> `.foldRight`. If we were to require evaluation of all elements, we can
+A> still get a `StackOverflowError`.
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   scala> Foldable[Stream].foldRight((1L until 100000L).toStream, Eval.now(0L)){
+A>            (el, acc) => Eval.later(el |+| acc.value)
+A>          }.value
+A>   java.lang.StackOverflowError
+A> ~~~~~~~~
+
+The only law for `Foldable` is that `.foldLeft` and `.foldRight` should
+each be consistent with `.foldMap` for monoidal operations. e.g.
+appending an element to a list for `.foldLeft` and prepending an
+element to a list for `.foldRight`. However, `.foldLeft` and `.foldRight`
+do not need to be consistent with each other: in fact they often
+produce the reverse of each other.
+
+The simplest thing to do with `.foldMap` is to use the `identity`
+function, giving `.combineAll` (the natural sum of the monoidal elements)
+
+{lang="text"}
+~~~~~~~~
+  def combineAll[A: Monoid](t: F[A]): A = ...
+~~~~~~~~
+
+Recall that when we learnt about `Monoid`, we wrote this:
+
+{lang="text"}
+~~~~~~~~
+  scala> templates.foldLeft(Monoid[TradeTemplate].empty)(_ |+| _)
+~~~~~~~~
+
+We now know we could have written:
+
+{lang="text"}
+~~~~~~~~
+  scala> templates.combineAll
+  res: TradeTemplate = TradeTemplate(
+                         List(2017-08-05,2017-09-05),
+                         Some(USD),
+                         Some(false))
+~~~~~~~~
+
+The strangely named `.intercalate` inserts a specific `A` between each
+element before performing the `fold`
+
+{lang="text"}
+~~~~~~~~
+  def intercalate[A: Monoid](fa: F[A], a: A): A = ...
+~~~~~~~~
+
+which is a generalised version of the stdlib's `.mkString`:
+
+{lang="text"}
+~~~~~~~~
+  scala> List("foo", "bar").intercalate(",")
+  res: String = "foo,bar"
+~~~~~~~~
+
+The `.foldLeft` provides the means to obtain any element by traversal
+index, including a bunch of other related methods:
+
+{lang="text"}
+~~~~~~~~
+  def get[A](fa: F[A])(idx: Long): Option[A] = ...
+  def size[A](fa: F[A]): Long = ...
+  def isEmpty[A](fa: F[A]): Boolean = ...
+  def nonEmpty[A](fa: F[A]): Boolean = ...
+~~~~~~~~
+
+Cats is a pure library of only *total functions*. Whereas `List(0)` can throw an
+exception, `Foldable.get` returns an `Option[A]` and would return `None` on an
+empty list. `.size`, `.isEmpty` and `.nonEmpty` do as we may expect.
+
+These methods *really* sound like a collections API. And, of course,
+anything with a `Foldable` can be converted into a `List`
+
+{lang="text"}
+~~~~~~~~
+  def toList[A](fa: F[A]): List[A] = ...
+~~~~~~~~
+
+There are useful predicate checks
+
+{lang="text"}
+~~~~~~~~
+  def count[A](fa: F[A])(p: A => Boolean): Long = ...
+  def forall[A](fa: F[A])(p: A => Boolean): Boolean = ...
+  def exists[A](fa: F[A])(p: A => Boolean): Boolean = ...
+  def find[A](fa: F[A])(f: A => Boolean): Option[A] = ...
+~~~~~~~~
+
+`.count` is a way of counting how many elements are `true` for a predicate,
+`.forall` and `.exists` return `true` if all (or any, respectively) element
+meets the predicate, and may exit early. `.find` returns the first element
+matching the predicate.
+
+A> We've seen the `NonEmptyList` in previous chapters. For the sake of
+A> brevity we use a type alias `Nel` in place of `NonEmptyList`.
+
+We can make use of `Order` by extracting the minimum or maximum element:
+
+{lang="text"}
+~~~~~~~~
+  def minimumOption[A: Order](fa: F[A]): Option[A] = ...
+  def minimumByOption[A, B: Order](fa: F[A])(f: A => B): Option[A] =
+  
+  def maximumOption[A: Order](fa: F[A]): Option[A] = ...
+  def maximumByOption[A, B: Order](fa: F[A])(f: A => B): Option[A] = ...
+~~~~~~~~
+
+For example we can ask which `String` is maximum (by lexicographical ordering)
+or `By` length
+
+{lang="text"}
+~~~~~~~~
+  scala> List("foo", "fazz").maximumOption
+  res: Option[String] = Some(foo)
+  
+  scala> List("foo", "fazz").maximumByOption(_.length)
+  res: Option[String] = Some(fazz)
+~~~~~~~~
+
+This concludes the key features of `Foldable`. The takeaway is that anything
+we'd expect to find in a collection library is probably on `Foldable`.
+
+There is `.combineAllOption` which is like `.fold` but takes a `Semigroup`
+instead of a `Monoid`, returning an `Option` if the collection is empty (recall
+that `Semigroup` does not have a `empty`):
+
+{lang="text"}
+~~~~~~~~
+  def combineAllOption[A: Semigroup](fa: F[A]): Option[A] = ...
+~~~~~~~~
+
+Taking this concept further, the child typeclass `Reducible` has more
+`Semigroup` variants and makes sense for data structures that are never empty,
+without requiring a `Monoid` on the elements.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass Reducible[F[_]] extends Foldable[F] {
+    def reduceLeft[A](fa: F[A])(f: (A, A) => A): A = ...
+    def reduceRight[A](fa: F[A])(f: (A, Eval[A]) => Eval [A]): Eval[A] = ...
+    def reduce[A: Semigroup](fa: F[A]): A = ...
+    def reduceMap[A, B: Semigroup](fa: F[A])(f: A => B): B =
+    ...
+  }
+~~~~~~~~
+
+Importantly, there are variants that take monadic calculations. We already used
+`.foldLeftM` when we first wrote the business logic of our application, now we
+know that it is from `Foldable`:
+
+{lang="text"}
+~~~~~~~~
+  def foldM[G[_]: Monad, A, B](fa: F[A], z: B)(f: (B, A) => G[B]): G[B] = ...
+  def foldMapM[G[_]: Monad, A, B: Monoid](fa: F[A])(f: A => G[B]): G[B] = ...
+  def findM[G[_]: Monad, A](fa: F[A])(p: A => G[Boolean]): G[Option[A]] = ...
+  def existsM[G[_]: Monad, A](fa: F[A])(p: A => G[Boolean]): G[Boolean] = ...
+  def forallM[G[_]: Monad, A](fa: F[A])(p: A => G[Boolean]): G[Boolean] = ...
+  ...
+~~~~~~~~
+
+Some of the methods we have seen in this section (`.size`, `.isEmpty`,
+`.nonEmpty`, `.exists`, `.forall`, `.count`) are defined on `UnorderedFoldable`,
+a parent of `Foldable`, and can be used for niche data structures that do not
+have an ordering.
 
 
