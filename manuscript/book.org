@@ -3116,6 +3116,8 @@ where to look for more information.
 Notably absent are many typeclasses that extend =Monad=. They get their own
 chapter later.
 
+TODO split the =Foldable= subgraph into its own
+
 #+BEGIN_SRC dot :file images/cats-core-tree.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
@@ -3260,7 +3262,7 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 60
+#+CAPTION: 80
 #+RESULTS:
 [[file:images/cats-core-cliques.png]]
 
@@ -3343,7 +3345,7 @@ should not matter, i.e.
 (1 |+| 2) |+| 3 == 1 |+| (2 |+| 3)
 #+END_SRC
 
-A =Monoid= is a =Semigroup= with an /empty/ element. Combining =zero= with any
+A =Monoid= is a =Semigroup= with an /empty/ element. Combining =.empty= with any
 other =a= should give =a=.
 
 #+BEGIN_SRC scala
@@ -3505,7 +3507,7 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 20
+#+CAPTION: 40
 #+RESULTS:
 [[file:images/cats-objecty.png]]
 
