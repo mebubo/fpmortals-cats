@@ -3469,3 +3469,237 @@ a parent of `Foldable`, and can be used for niche data structures that do not
 have an ordering.
 
 
+### Traverse
+
+`Traverse` is what happens when we cross a `Functor` with a `Foldable`
+
+{lang="text"}
+~~~~~~~~
+  trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
+    def traverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[B]): G[F[B]]
+    def sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] = ...
+  
+    def zipWithIndex[A](fa: F[A]): F[(A, Int)] = ...
+    def mapWithIndex[A, B](fa: F[A])(f: (A, Int) => B): F[B] = ...
+  
+    def flatTraverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[F[B]])
+          (implicit F: FlatMap[F]): G[F[B]] = ...
+  
+    def flatSequence[G[_]: Applicative, A](fgfa: F[G[F[A]]])
+          (implicit F: FlatMap[F]): G[F[A]] = ...
+  }
+~~~~~~~~
+
+At the beginning of the chapter we showed the importance of `.traverse`
+and `.sequence` for swapping around type constructors to fit a
+requirement (e.g. `List[Future[_]]` to `Future[List[_]]`).
+
+We can `.zipWithIndex` to pair each element with its ordered location, or
+`.mapWithIndex` if we wish to do something with the index but do not need to
+keep it around.
+
+`.flatTraverse` and `.flatSequence` are useful for cases where we want to
+flatten the results of the calculation. For example, say we have a
+`List[Future[List[_]]]` and we want a `Future[List[_]]` by concatenating all the
+lists.
+
+Finally `NonEmptyTraverse`, like `Reducible`, provides variants of these methods
+for data structures that cannot be empty, accepting the weaker `Semigroup`
+instead of a `Monoid`, and an `Apply` instead of an `Applicative`.
+
+
+## More Functors
+
+Although not part of the typeclass hierarchy, these are some typeclasses closely
+related to `Functor` that are worth knowing
+
+{width=60%}
+![](images/cats-core-functors.png)
+
+
+### Align
+
+`Align` is about merging and padding a `Functor`. Before
+looking at `Align`, meet the `Ior` data type:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Ior[+A, +B]
+  final case class Left[A](a: A) extends Ior[A, Nothing]
+  final case class Right[B](b: B) extends Ior[Nothing, B]
+  final case class Both[A, B](a: A, b: B) extends Ior[A, B]
+~~~~~~~~
+
+i.e. it is a data encoding of inclusive logical `OR`. `A` or `B` or both `A` and
+`B`.
+
+`Align` does not extend `Functor` but instead must be able to provide one
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Align[F[_]] {
+    def functor: Functor[F]
+  
+    def align[A, B](fa: F[A], fb: F[B]): F[Ior[A, B]]
+    def alignWith[A, B, C](fa: F[A], fb: F[B])(f: Ior[A, B] => C): F[C] = ...
+  
+    def alignCombine[A: Semigroup](fa1: F[A], fa2: F[A]): F[A] = ...
+  
+    def padZip[A, B](fa: F[A], fb: F[B]): F[(Option[A], Option[B])] = ...
+    def padZipWith[A, B, C](fa: F[A], fb: F[B])(f: (Option[A], Option[B]) => C): F[C] = ...
+  }
+~~~~~~~~
+
+`.align` constructs an `Ior` out of two `F[_]`, in the same `F[_]` context.
+
+`.alignWith` takes a function from either an `A` or a `B` (or both) to
+a `C` and returns a lifted function from a tuple of `F[A]` and `F[B]`
+to an `F[C]`.
+
+`.alignCombine` allows us to combine two `F[A]` when `A` has a `Semigroup`. For example,
+the implementation of `Semigroup[Map[K, V]]` defers to `Semigroup[V]`, combining
+two entries results in combining their values, having the consequence that
+`Map[K, List[A]]` behaves like a multimap:
+
+{lang="text"}
+~~~~~~~~
+  scala> Map("foo" -> List(1)) alignCombine Map("foo" -> List(1), "bar" -> List(2))
+  res = Map(foo -> List(1, 1), bar -> List(2))
+~~~~~~~~
+
+and a `Map[K, Int]` simply tally their contents when merging:
+
+{lang="text"}
+~~~~~~~~
+  scala> Map("foo" -> 1) alignCombine Map("foo" -> 1, "bar" -> 2)
+  res = Map(foo -> 2, bar -> 2)
+~~~~~~~~
+
+`.padZip` and `.padZipWith` are for partially merging two data structures that might
+be missing values on one side. For example if we wanted to aggregate independent
+votes and retain the knowledge of where the votes came from
+
+{lang="text"}
+~~~~~~~~
+  scala> Map("foo" -> 1) padZip Map("foo" -> 1, "bar" -> 2)
+  res = Map(foo -> (Some(1),Some(1)), bar -> (None,Some(2)))
+  
+  scala> Map("foo" -> 1, "bar" -> 2) padZip Map("foo" -> 1)
+  res = Map(foo -> (Some(1),Some(1)), bar -> (Some(2),None))
+~~~~~~~~
+
+
+### Bifunctor, Bifoldable and Bitraverse
+
+Cats provides variations of `Functor`, `Foldable` and `Traverse` for structures
+that require two functions, not just one.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Bifunctor[F[_, _]] {
+    def bimap[A, B, C, D](fab: F[A, B])(f: A => C, g: B => D): F[C, D]
+    def leftMap[A, B, C](fab: F[A, B])(f: A => C): F[C, B] = ...
+    ...
+  }
+~~~~~~~~
+
+The simplest example of a `Bifunctor` is `Either`. Sometimes we want to map over
+both possible values in a convenient way
+
+{lang="text"}
+~~~~~~~~
+  scala> val a: Either[String, Int] = Left("fail")
+         val b: Either[String, Int] = Right(13)
+  
+  scala> b.bimap(_.toUpperCase, _ * 2)
+  res: Either[String, Int] = Right(26)
+  
+  scala> a.bimap(_.toUpperCase, _ * 2)
+  res: Either[String, Int] = Left(FAIL)
+~~~~~~~~
+
+And whereas we can use the regular `.map` to map over the `Right`, sometimes we
+want to map over just the `Left`, which often contains the an error message
+
+{lang="text"}
+~~~~~~~~
+  scala> a.leftMap(_.toUpperCase)
+  res: Either[String,Int] = Left(FAIL)
+  
+  scala> b.leftMap(_.toUpperCase)
+  res: Either[String, Int] = Right(13)
+~~~~~~~~
+
+leaving the contents of the `Right` untouched.
+
+Similarly `Bifoldable` and `Bitraverse` are the same idea for `Foldable` and `Traverse`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Bifoldable[F[_, _]] {
+    def bifoldLeft[A, B, C](fab: F[A, B], c: C)(f: (C, A) => C, g: (C, B) => C): C
+    def bifoldRight[A, B, C](fab: F[A, B], c: Eval[C])
+          (f: (A, Eval[C]) => Eval[C], g: (B, Eval[C]) => Eval[C]): Eval[C]
+  
+    def bifoldMap[A, B, C: Monoid](fab: F[A, B])(f: A => C, g: B => C): C = ...
+    def bifold[A: Monoid, B: Monoid](fab: F[A, B]): (A, B) = ...
+  }
+  
+  @typeclass trait Bitraverse[F[_, _]] extends Bifunctor[F] with Bifoldable[F] {
+    def bitraverse[G[_]: Applicative, A, B, C, D](fab: F[A, B])
+          (f: A => G[C], g: B => G[D]): G[F[C, D]]
+  
+    def bisequence[G[_]: Applicative, A, B](fab: F[G[A], G[B]]): G[F[A, B]] = ...
+  }
+~~~~~~~~
+
+`.bifoldMap` is especially useful for the case where both functions return the
+same value, allowing us to produce a single value and combine the two sides:
+
+{lang="text"}
+~~~~~~~~
+  scala> val a: Either[String, Int] = Left("fail")
+         val b: Either[String, Int] = Right(13)
+  
+  scala> a.bifoldMap(_.length, identity)
+  res: Int = 4
+  
+  scala> a.bitraverse(s => Option(s.length), i => Option(i))
+  res: Option[Either[Int,Int]] = Some(Left(4))
+~~~~~~~~
+
+
+### Filters
+
+`FunctorFilter` adds the ability to discard entries from the functor with its
+`.mapFilter` method and related convenience methods. Similarly to `Align`,
+`FunctorFilter` must be able to provide a `Functor`.
+
+{lang="text"}
+~~~~~~~~
+  trait FunctorFilter[F[_]] extends Serializable {
+    def functor: Functor[F]
+  
+    def mapFilter[A, B](fa: F[A])(f: A => Option[B]): F[B]
+    def filter[A](fa: F[A])(f: A => Boolean): F[A] = ...
+    def filterNot[A](fa: F[A])(f: A => Boolean): F[A] = ...
+  
+    def collect[A, B](fa: F[A])(f: PartialFunction[A, B]): F[B] = ...
+    def flattenOption[A](fa: F[Option[A]]): F[A] = ...
+  }
+~~~~~~~~
+
+And similarly, `TraverseFilter` can filter the values while traversing or sequencing
+
+{lang="text"}
+~~~~~~~~
+  trait TraverseFilter[F[_]] extends FunctorFilter[F] {
+    def traverse: Traverse[F]
+  
+    def traverseFilter[G[_]: Applicative, A, B](fa: F[A])(f: A => G[Option[B]]): G[F[B]]
+    def sequenceFilter[G[_]: Applicative, A](fgoa: F[G[Option[A]]]): G[F[A]] = ...
+    def filterA[G[_]: Applicative, A](fa: F[A])(f: A => G[Boolean]): G[F[A]] = ...
+  }
+~~~~~~~~
+
+

@@ -3246,6 +3246,7 @@ digraph G {
     LowerBounded;
     UpperBounded;
 
+    Align;
     FunctorFilter;
     TraverseFilter;
     TraverseFilter -> FunctorFilter;
@@ -3269,7 +3270,6 @@ digraph G {
 
     Hash;
     Show;
-    Align;
 
     NonEmptyParallel;
     Parallel;
@@ -4051,11 +4051,6 @@ Some of the methods we have seen in this section (=.size=, =.isEmpty=,
 a parent of =Foldable=, and can be used for niche data structures that do not
 have an ordering.
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 **** Traverse
 
 =Traverse= is what happens when we cross a =Functor= with a =Foldable=
@@ -4065,253 +4060,343 @@ trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
   def traverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[B]): G[F[B]]
   def sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] = ...
 
-  def reverse[A](fa: F[A]): F[A] = ...
+  def zipWithIndex[A](fa: F[A]): F[(A, Int)] = ...
+  def mapWithIndex[A, B](fa: F[A])(f: (A, Int) => B): F[B] = ...
 
-  def zipL[A, B](fa: F[A], fb: F[B]): F[(A, Option[B])] = ...
-  def zipR[A, B](fa: F[A], fb: F[B]): F[(Option[A], B)] = ...
-  def indexed[A](fa: F[A]): F[(Int, A)] = ...
-  def zipWithL[A, B, C](fa: F[A], fb: F[B])(f: (A, Option[B]) => C): F[C] = ...
-  def zipWithR[A, B, C](fa: F[A], fb: F[B])(f: (Option[A], B) => C): F[C] = ...
+  def flatTraverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[F[B]])
+        (implicit F: FlatMap[F]): G[F[B]] = ...
 
-  def mapAccumL[S, A, B](fa: F[A], z: S)(f: (S, A) => (S, B)): (S, F[B]) = ...
-  def mapAccumR[S, A, B](fa: F[A], z: S)(f: (S, A) => (S, B)): (S, F[B]) = ...
+  def flatSequence[G[_]: Applicative, A](fgfa: F[G[F[A]]])
+        (implicit F: FlatMap[F]): G[F[A]] = ...
 }
 #+END_SRC
 
-At the beginning of the chapter we showed the importance of =traverse=
-and =sequence= for swapping around type constructors to fit a
+At the beginning of the chapter we showed the importance of =.traverse=
+and =.sequence= for swapping around type constructors to fit a
 requirement (e.g. =List[Future[_]]= to =Future[List[_]]=).
 
-In =Foldable= we weren't able to assume that =reverse= was a universal
-concept, but now we can reverse a thing.
+We can =.zipWithIndex= to pair each element with its ordered location, or
+=.mapWithIndex= if we wish to do something with the index but do not need to
+keep it around.
 
-We can also =zip= together two things that have a =Traverse=, getting
-back =None= when one side runs out of elements, using =zipL= or =zipR=
-to decide which side to truncate when the lengths don't match. A
-special case of =zip= is to add an index to every entry with
-=indexed=.
+=.flatTraverse= and =.flatSequence= are useful for cases where we want to
+flatten the results of the calculation. For example, say we have a
+=List[Future[List[_]]]= and we want a =Future[List[_]]= by concatenating all the
+lists.
 
-=zipWithL= and =zipWithR= allow combining the two sides of a =zip=
-into a new type, and then returning just an =F[C]=.
+Finally =NonEmptyTraverse=, like =Reducible=, provides variants of these methods
+for data structures that cannot be empty, accepting the weaker =Semigroup=
+instead of a =Monoid=, and an =Apply= instead of an =Applicative=.
 
-=mapAccumL= and =mapAccumR= are regular =map= combined with an accumulator. If
-we find our old Java ways make us want to reach for a =var=, and refer to it
-from a =map=, we should be using =mapAccumL=.
+*** More Functors
 
-For example, let's say we have a list of words and we want to blank
-out words we've already seen. The filtering algorithm is not allowed
-to process the list of words a second time so it can be scaled to an
-infinite stream:
+Although not part of the typeclass hierarchy, these are some typeclasses closely
+related to =Functor= that are worth knowing
 
-#+BEGIN_SRC scala
-scala> val freedom =
-"""We campaign for these freedoms because everyone deserves them.
-   With these freedoms, the users (both individually and collectively)
-   control the program and what it does for them."""
-   .split("\\s+")
-   .toList
+#+BEGIN_SRC dot :file images/cats-core-functors.png :exports results
+digraph G {
+    graph [dpi=300, rankdir=BT];
+    node [fontname=Hack];
 
-scala> def clean(s: String): String = s.toLowerCase.replaceAll("[,.()]+", "")
+    Align;
+    FunctorFilter;
+    TraverseFilter;
+    TraverseFilter -> FunctorFilter;
 
-scala> freedom
-       .mapAccumL(Set.empty[String]) { (seen, word) =>
-         val cleaned = clean(word)
-         (seen + cleaned, if (seen(cleaned)) "_" else word)
-       }
-       ._2
-       .intercalate(" ")
+    Bifunctor;
+    Bifoldable;
+    Bitraverse -> Bifunctor;
+    Bitraverse -> Bifoldable;
 
-res: String =
-"""We campaign for these freedoms because everyone deserves them.
-   With _ _ the users (both individually and collectively)
-   control _ program _ what it does _ _"""
+}
 #+END_SRC
 
-Finally =Traverse1=, like =Foldable1=, provides variants of these methods for
-data structures that cannot be empty, accepting the weaker =Semigroup= instead
-of a =Monoid=, and an =Apply= instead of an =Applicative=. Recall that
-=Semigroup= does not have to provide an =.empty=, and =Apply= does not have to
-provide a =.point=.
+#+CAPTION: 60
+#+RESULTS:
+[[file:images/cats-core-functors.png]]
 
 **** Align
 
-=Align= is about merging and padding anything with a =Functor=. Before
-looking at =Align=, meet the ~\&/~ data type (spoken as /These/, or
-/hurray!/).
+=Align= is about merging and padding a =Functor=. Before
+looking at =Align=, meet the =Ior= data type:
 
 #+BEGIN_SRC scala
-sealed abstract class \&/[+A, +B]
-final case class This[A](aa: A) extends (A \&/ Nothing)
-final case class That[B](bb: B) extends (Nothing \&/ B)
-final case class Both[A, B](aa: A, bb: B) extends (A \&/ B)
+sealed abstract class Ior[+A, +B]
+final case class Left[A](a: A) extends Ior[A, Nothing]
+final case class Right[B](b: B) extends Ior[Nothing, B]
+final case class Both[A, B](a: A, b: B) extends Ior[A, B]
 #+END_SRC
 
 i.e. it is a data encoding of inclusive logical =OR=. =A= or =B= or both =A= and
 =B=.
 
+=Align= does not extend =Functor= but instead must be able to provide one
+
 #+BEGIN_SRC scala
-@typeclass trait Align[F[_]] extends Functor[F] {
-  def alignWith[A, B, C](f: A \&/ B => C): (F[A], F[B]) => F[C]
-  def align[A, B](a: F[A], b: F[B]): F[A \&/ B] = ...
+@typeclass trait Align[F[_]] {
+  def functor: Functor[F]
 
-  def merge[A: Semigroup](a1: F[A], a2: F[A]): F[A] = ...
+  def align[A, B](fa: F[A], fb: F[B]): F[Ior[A, B]]
+  def alignWith[A, B, C](fa: F[A], fb: F[B])(f: Ior[A, B] => C): F[C] = ...
 
-  def pad[A, B]: (F[A], F[B]) => F[(Option[A], Option[B])] = ...
-  def padWith[A, B, C](f: (Option[A], Option[B]) => C): (F[A], F[B]) => F[C] = ...
+  def alignCombine[A: Semigroup](fa1: F[A], fa2: F[A]): F[A] = ...
+
+  def padZip[A, B](fa: F[A], fb: F[B]): F[(Option[A], Option[B])] = ...
+  def padZipWith[A, B, C](fa: F[A], fb: F[B])(f: (Option[A], Option[B]) => C): F[C] = ...
+}
 #+END_SRC
 
-=alignWith= takes a function from either an =A= or a =B= (or both) to
-a =C= and returns a lifted function from a tuple of =F[A]= and =F[B]=
-to an =F[C]=. =align= constructs a ~\&/~ out of two =F[_]=.
+=.align= constructs an ~Ior~ out of two =F[_]=, in the same =F[_]= context.
 
-=merge= allows us to combine two =F[A]= when =A= has a =Semigroup=. For example,
+=.alignWith= takes a function from either an =A= or a =B= (or both) to
+a =C= and returns a lifted function from a tuple of =F[A]= and =F[B]=
+to an =F[C]=.
+
+=.alignCombine= allows us to combine two =F[A]= when =A= has a =Semigroup=. For example,
 the implementation of =Semigroup[Map[K, V]]= defers to =Semigroup[V]=, combining
 two entries results in combining their values, having the consequence that
 =Map[K, List[A]]= behaves like a multimap:
 
 #+BEGIN_SRC scala
-scala> Map("foo" -> List(1)) merge Map("foo" -> List(1), "bar" -> List(2))
+scala> Map("foo" -> List(1)) alignCombine Map("foo" -> List(1), "bar" -> List(2))
 res = Map(foo -> List(1, 1), bar -> List(2))
 #+END_SRC
 
 and a =Map[K, Int]= simply tally their contents when merging:
 
 #+BEGIN_SRC scala
-scala> Map("foo" -> 1) merge Map("foo" -> 1, "bar" -> 2)
+scala> Map("foo" -> 1) alignCombine Map("foo" -> 1, "bar" -> 2)
 res = Map(foo -> 2, bar -> 2)
 #+END_SRC
 
-=.pad= and =.padWith= are for partially merging two data structures that might
+=.padZip= and =.padZipWith= are for partially merging two data structures that might
 be missing values on one side. For example if we wanted to aggregate independent
 votes and retain the knowledge of where the votes came from
 
 #+BEGIN_SRC scala
-scala> Map("foo" -> 1) pad Map("foo" -> 1, "bar" -> 2)
+scala> Map("foo" -> 1) padZip Map("foo" -> 1, "bar" -> 2)
 res = Map(foo -> (Some(1),Some(1)), bar -> (None,Some(2)))
 
-scala> Map("foo" -> 1, "bar" -> 2) pad Map("foo" -> 1)
+scala> Map("foo" -> 1, "bar" -> 2) padZip Map("foo" -> 1)
 res = Map(foo -> (Some(1),Some(1)), bar -> (Some(2),None))
 #+END_SRC
 
-There are convenient variants of =align= that make use of the
-structure of =\&/=
+**** Bifunctor, Bifoldable and Bitraverse
+
+Cats provides variations of =Functor=, =Foldable= and =Traverse= for structures
+that require two functions, not just one.
 
 #+BEGIN_SRC scala
+@typeclass trait Bifunctor[F[_, _]] {
+  def bimap[A, B, C, D](fab: F[A, B])(f: A => C, g: B => D): F[C, D]
+  def leftMap[A, B, C](fab: F[A, B])(f: A => C): F[C, B] = ...
   ...
-  def alignSwap[A, B](a: F[A], b: F[B]): F[B \&/ A] = ...
-  def alignA[A, B](a: F[A], b: F[B]): F[Option[A]] = ...
-  def alignB[A, B](a: F[A], b: F[B]): F[Option[B]] = ...
-  def alignThis[A, B](a: F[A], b: F[B]): F[Option[A]] = ...
-  def alignThat[A, B](a: F[A], b: F[B]): F[Option[B]] = ...
-  def alignBoth[A, B](a: F[A], b: F[B]): F[Option[(A, B)]] = ...
 }
 #+END_SRC
 
-which should make sense from their type signatures. Examples:
+The simplest example of a =Bifunctor= is =Either=. Sometimes we want to map over
+both possible values in a convenient way
 
 #+BEGIN_SRC scala
-scala> List(1,2,3) alignSwap List(4,5)
-res = List(Both(4,1), Both(5,2), That(3))
+scala> val a: Either[String, Int] = Left("fail")
+       val b: Either[String, Int] = Right(13)
 
-scala> List(1,2,3) alignA List(4,5)
-res = List(Some(1), Some(2), Some(3))
+scala> b.bimap(_.toUpperCase, _ * 2)
+res: Either[String, Int] = Right(26)
 
-scala> List(1,2,3) alignB List(4,5)
-res = List(Some(4), Some(5), None)
-
-scala> List(1,2,3) alignThis List(4,5)
-res = List(None, None, Some(3))
-
-scala> List(1,2,3) alignThat List(4,5)
-res = List(None, None, None)
-
-scala> List(1,2,3) alignBoth List(4,5)
-res = List(Some((1,4)), Some((2,5)), None)
+scala> a.bimap(_.toUpperCase, _ * 2)
+res: Either[String, Int] = Left(FAIL)
 #+END_SRC
 
-Note that the =A= and =B= variants use inclusive =OR=, whereas the
-=This= and =That= variants are exclusive, returning =None= if there is
-a value in both sides, or no value on either side.
+And whereas we can use the regular =.map= to map over the =Right=, sometimes we
+want to map over just the =Left=, which often contains the an error message
+
+#+BEGIN_SRC scala
+scala> a.leftMap(_.toUpperCase)
+res: Either[String,Int] = Left(FAIL)
+
+scala> b.leftMap(_.toUpperCase)
+res: Either[String, Int] = Right(13)
+#+END_SRC
+
+leaving the contents of the =Right= untouched.
+
+Similarly =Bifoldable= and =Bitraverse= are the same idea for =Foldable= and =Traverse=
+
+#+BEGIN_SRC scala
+@typeclass trait Bifoldable[F[_, _]] {
+  def bifoldLeft[A, B, C](fab: F[A, B], c: C)(f: (C, A) => C, g: (C, B) => C): C
+  def bifoldRight[A, B, C](fab: F[A, B], c: Eval[C])
+        (f: (A, Eval[C]) => Eval[C], g: (B, Eval[C]) => Eval[C]): Eval[C]
+
+  def bifoldMap[A, B, C: Monoid](fab: F[A, B])(f: A => C, g: B => C): C = ...
+  def bifold[A: Monoid, B: Monoid](fab: F[A, B]): (A, B) = ...
+}
+
+@typeclass trait Bitraverse[F[_, _]] extends Bifunctor[F] with Bifoldable[F] {
+  def bitraverse[G[_]: Applicative, A, B, C, D](fab: F[A, B])
+        (f: A => G[C], g: B => G[D]): G[F[C, D]]
+
+  def bisequence[G[_]: Applicative, A, B](fab: F[G[A], G[B]]): G[F[A, B]] = ...
+}
+#+END_SRC
+
+=.bifoldMap= is especially useful for the case where both functions return the
+same value, allowing us to produce a single value and combine the two sides:
+
+#+BEGIN_SRC scala
+scala> val a: Either[String, Int] = Left("fail")
+       val b: Either[String, Int] = Right(13)
+
+scala> a.bifoldMap(_.length, identity)
+res: Int = 4
+
+scala> a.bitraverse(s => Option(s.length), i => Option(i))
+res: Option[Either[Int,Int]] = Some(Left(4))
+#+END_SRC
+
+**** Filters
+
+=FunctorFilter= adds the ability to discard entries from the functor with its
+=.mapFilter= method and related convenience methods. Similarly to =Align=,
+=FunctorFilter= must be able to provide a =Functor=.
+
+#+BEGIN_SRC scala
+trait FunctorFilter[F[_]] extends Serializable {
+  def functor: Functor[F]
+
+  def mapFilter[A, B](fa: F[A])(f: A => Option[B]): F[B]
+  def filter[A](fa: F[A])(f: A => Boolean): F[A] = ...
+  def filterNot[A](fa: F[A])(f: A => Boolean): F[A] = ...
+
+  def collect[A, B](fa: F[A])(f: PartialFunction[A, B]): F[B] = ...
+  def flattenOption[A](fa: F[Option[A]]): F[A] = ...
+}
+#+END_SRC
+
+And similarly, =TraverseFilter= can filter the values while traversing or sequencing
+
+#+BEGIN_SRC scala
+trait TraverseFilter[F[_]] extends FunctorFilter[F] {
+  def traverse: Traverse[F]
+
+  def traverseFilter[G[_]: Applicative, A, B](fa: F[A])(f: A => G[Option[B]]): G[F[B]]
+  def sequenceFilter[G[_]: Applicative, A](fgoa: F[G[Option[A]]]): G[F[A]] = ...
+  def filterA[G[_]: Applicative, A](fa: F[A])(f: A => G[Boolean]): G[F[A]] = ...
+}
+#+END_SRC
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** Variance
 
 We must return to =Functor= for a moment and discuss an ancestor that
 we previously ignored:
 
-#+BEGIN_SRC dot :file images/scalaz-variance.png :exports results
+#+BEGIN_SRC dot :file images/cats-variance.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Cobind;
-    Comonad;
-    Bind;
-    Apply;
-    Contravariant [fontcolor=black,color=black];
+    Invariant [fontcolor=black,color=black];
+    InvariantSemigroupal [fontcolor=black,color=black];
+    InvariantSemigroupal -> Invariant [color=black];
+    Semigroupal [fontcolor=black,color=black];
+    InvariantSemigroupal -> Semigroupal [color=black];
+    InvariantMonoidal [fontcolor=black,color=black];
+    InvariantMonoidal -> InvariantSemigroupal;
+
     Functor [fontcolor=black,color=black];
-    InvariantFunctor [fontcolor=black,color=black];
-    Functor;
-    Divide;
-    Divisible;
+    Functor -> Invariant [color=black];
     Apply;
-    Align [fontcolor=lightslategray,color=lightslategray];
-    Applicative;
-    Foldable1 [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse1 [fontcolor=lightslategray,color=lightslategray];
-    Monad;
-    "Advanced Monads" [style=dashed];
-    Plus;
-    PlusEmpty;
-    IsEmpty;
-    ApplicativePlus;
-    MonadPlus;
-
-    Cobind -> Functor;
-    Comonad -> Cobind;
-
-    Bind -> Apply;
-
-    Contravariant -> InvariantFunctor [color=black];
-    Functor -> InvariantFunctor [color=black];
-
-    Divide -> Contravariant;
-    Divisible -> Divide;
+    Apply -> InvariantSemigroupal;
     Apply -> Functor;
+    Applicative;
     Applicative -> Apply;
+    Applicative -> InvariantMonoidal;
+    FlatMap;
+    FlatMap -> Apply;
+    Monad;
+    Monad -> Applicative;
+    Monad -> FlatMap;
 
-    Align -> Functor [color=lightslategray];
-
-    Foldable1 -> Foldable [color=lightslategray];
+    UnorderedFoldable;
+    Foldable [fontcolor=lightslategray,color=lightslategray];
+    Foldable -> UnorderedFoldable;
+    Reducible [fontcolor=lightslategray,color=lightslategray];
+    Reducible -> Foldable [color=lightslategray];
+    UnorderedTraverse;
+    Traverse [fontcolor=lightslategray,color=lightslategray];
     Traverse -> Functor [color=lightslategray];
     Traverse -> Foldable [color=lightslategray];
-    Traverse1 -> Traverse [color=lightslategray];
-    Traverse1 -> Foldable1 [color=lightslategray];
+    Traverse -> UnorderedTraverse;
+    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
+    NonEmptyTraverse -> Traverse [color=lightslategray];
+    NonEmptyTraverse -> Reducible [color=lightslategray];
 
-    Monad -> Applicative;
-    "Advanced Monads" -> Monad;
-    Monad -> Bind;
+    Contravariant [fontcolor=black,color=black];
+    Contravariant -> Invariant [color=black];
+    ContravariantSemigroupal [fontcolor=black,color=black];
+    ContravariantSemigroupal -> InvariantSemigroupal;
+    ContravariantSemigroupal -> Contravariant;
+    ContravariantMonoidal [fontcolor=black,color=black];
+    ContravariantMonoidal -> InvariantMonoidal;
+    ContravariantMonoidal -> ContravariantSemigroupal;
 
-    PlusEmpty -> Plus;
-    IsEmpty -> PlusEmpty;
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
 
-    ApplicativePlus -> Applicative;
-    ApplicativePlus -> PlusEmpty;
-    MonadPlus -> ApplicativePlus;
-    MonadPlus -> Monad;
+    Distributive;
+    Distributive -> Functor;
+
+    SemigroupK;
+    MonoidK;
+    MonoidK -> SemigroupK;
+    Alternative;
+    Alternative -> Applicative;
+    Alternative -> MonoidK;
+
+    ApplicativeError;
+    ApplicativeError -> Applicative;
+    MonadError;
+    MonadError -> ApplicativeError;
+
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    StackSafeMonad;
+    StackSafeMonad -> Monad;
+
+    CommutativeApply;
+    CommutativeApply -> Apply;
+    CommutativeApplicative;
+    CommutativeApplicative -> Applicative;
+    CommutativeApplicative -> CommutativeApply;
+    CommutativeFlatMap;
+    CommutativeFlatMap -> FlatMap;
+    CommutativeFlatMap -> CommutativeApply;
+    CommutativeMonad;
+    CommutativeMonad -> Monad;
+    CommutativeMonad -> CommutativeFlatMap;
+    CommutativeMonad -> CommutativeApplicative;
+
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-variance.png]]
+[[file:images/cats-variance.png]]
 
-=InvariantFunctor=, also known as the /exponential functor/, has a
-method =xmap= which says that given a function from =A= to =B=, and a
-function from =B= to =A=, then we can convert =F[A]= to =F[B]=.
+=Invariant= has a method =.imap= which says that given a function from =A= to
+=B=, and a function from =B= to =A=, then we can convert =F[A]= to =F[B]=.
 
 =Functor= is a short name for what should be /covariant functor/. But
 since =Functor= is so popular it gets the nickname. Likewise
@@ -4388,6 +4473,11 @@ have an /invariant functor/. For example, =Semigroup= and =Monoid= have an
 =InvariantFunctor=, but not a =Functor= or a =Contravariant=.
 
 *** Apply and Bind
+
+TODO
+
+
+
 
 Consider this the warm-up act to =Applicative= and =Monad=
 
@@ -5641,116 +5731,6 @@ Although named =cozip=, it is perhaps more appropriate to talk about
 its symmetry with =unzip=. Whereas =unzip= splits =F[_]= of tuples
 (products) into tuples of =F[_]=, =cozip= splits =F[_]= of
 disjunctions (coproducts) into disjunctions of =F[_]=.
-
-*** Bi-things
-
-Sometimes we may find ourselves with a thing that has two type holes
-and we want to =map= over both sides. For example we might be tracking
-failures in the left of an =Either= and we want to do something with the
-failure messages.
-
-The =Functor= / =Foldable= / =Traverse= typeclasses have bizarro
-relatives that allow us to map both ways.
-
-#+BEGIN_SRC dot :file images/scalaz-bithings.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT];
-    node [fontname=Hack];
-
-    Bitraverse -> Bifunctor;
-    Bitraverse -> Bifoldable;
-}
-#+END_SRC
-
-#+CAPTION: 30
-#+RESULTS:
-[[file:images/scalaz-bithings.png]]
-
-#+BEGIN_SRC scala
-@typeclass trait Bifunctor[F[_, _]] {
-  def bimap[A, B, C, D](fab: F[A, B])(f: A => C, g: B => D): F[C, D]
-
-  @op("<-:") def leftMap[A, B, C](fab: F[A, B])(f: A => C): F[C, B] = ...
-  @op(":->") def rightMap[A, B, D](fab: F[A, B])(g: B => D): F[A, D] = ...
-  @op("<:>") def umap[A, B](faa: F[A, A])(f: A => B): F[B, B] = ...
-}
-
-@typeclass trait Bifoldable[F[_, _]] {
-  def bifoldMap[A, B, M: Monoid](fa: F[A, B])(f: A => M)(g: B => M): M
-
-  def bifoldRight[A,B,C](fa: F[A, B], z: =>C)(f: (A, =>C) => C)(g: (B, =>C) => C): C
-  def bifoldLeft[A,B,C](fa: F[A, B], z: C)(f: (C, A) => C)(g: (C, B) => C): C = ...
-
-  def bifoldMap1[A, B, M: Semigroup](fa: F[A,B])(f: A => M)(g: B => M): Option[M] = ...
-}
-
-@typeclass trait Bitraverse[F[_, _]] extends Bifunctor[F] with Bifoldable[F] {
-  def bitraverse[G[_]: Applicative, A, B, C, D](fab: F[A, B])
-                                               (f: A => G[C])
-                                               (g: B => G[D]): G[F[C, D]]
-
-  def bisequence[G[_]: Applicative, A, B](x: F[G[A], G[B]]): G[F[A, B]] = ...
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-=<-:= and =:->= are the happy operators!
-#+END_ASIDE
-
-Although the type signatures are verbose, these are nothing more than
-the core methods of =Functor=, =Foldable= and =Bitraverse= taking two
-functions instead of one, often requiring both functions to return the
-same type so that their results can be combined with a =Monoid= or
-=Semigroup=.
-
-#+BEGIN_SRC scala
-scala> val a: Either[String, Int] = Left("fail")
-       val b: Either[String, Int] = Right(13)
-
-scala> b.bimap(_.toUpperCase, _ * 2)
-res: Either[String, Int] = Right(26)
-
-scala> a.bimap(_.toUpperCase, _ * 2)
-res: Either[String, Int] = Left(FAIL)
-
-scala> b :-> (_ * 2)
-res: Either[String,Int] = Right(26)
-
-scala> a :-> (_ * 2)
-res: Either[String, Int] = Left(fail)
-
-scala> { s: String => s.length } <-: a
-res: Either[Int, Int] = Left(4)
-
-scala> a.bifoldMap(_.length)(identity)
-res: Int = 4
-
-scala> b.bitraverse(s => Future(s.length), i => Future(i))
-res: Future[Either[Int, Int]] = Future(<not completed>)
-#+END_SRC
-
-In addition, we can revisit =MonadPlus= (recall it is =Monad= with the
-ability to =filterWith= and =unite=) and see that it can =separate=
-=Bifoldable= contents of a =Monad=
-
-#+BEGIN_SRC scala
-@typeclass trait MonadPlus[F[_]] {
-  ...
-  def separate[G[_, _]: Bifoldable, A, B](value: F[G[A, B]]): (F[A], F[B]) = ...
-  ...
-}
-#+END_SRC
-
-This is very useful if we have a collection of bi-things and we want
-to reorganise them into a collection of =A= and a collection of =B=
-
-#+BEGIN_SRC scala
-scala> val list: List[Either[Int, String]] =
-         List(Right("hello"), Left(1), Left(2), Right("world"))
-
-scala> list.separate
-res: (List[Int], List[String]) = (List(1, 2), List(hello, world))
-#+END_SRC
 
 *** Summary
 
