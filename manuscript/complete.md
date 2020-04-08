@@ -3703,3 +3703,472 @@ And similarly, `TraverseFilter` can filter the values while traversing or sequen
 ~~~~~~~~
 
 
+## Variance
+
+We must return to `Functor` for a moment and discuss an ancestor that
+we previously ignored:
+
+{width=100%}
+![](images/cats-variance.png)
+
+`Invariant` has a method `.imap` which says that given a function from `A` to
+`B`, and a function from `B` to `A`, then we can convert `F[A]` to `F[B]`.
+
+`Functor` is a short name for what should be *covariant functor*. But since
+`Functor` is so popular it gets the nickname. Likewise `Contravariant` should
+really be *contravariant functor*, and `Invariant` an *invariant functor*.
+
+`Functor` implements `.imap` with `.map` and ignores the function from
+`B` to `A`. `Contravariant`, on the other hand, implements `.imap` with
+`.contramap` and ignores the function from `A` to `B`:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Invariant[F[_]] {
+    def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B]
+    ...
+  }
+  
+  @typeclass trait Functor[F[_]] extends Invariant[F] {
+    def map[A, B](fa: F[A])(f: A => B): F[B]
+    def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = map(fa)(f)
+    ...
+  }
+  
+  @typeclass trait Contravariant[F[_]] extends Invariant[F] {
+    def contramap[A, B](fa: F[A])(f: B => A): F[B]
+    def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = contramap(fa)(g)
+    ...
+  }
+~~~~~~~~
+
+It is important to note that, although related at a theoretical level,
+the words *covariant*, *contravariant* and *invariant* do not directly
+refer to Scala type variance (i.e. `+` and `-` prefixes that may be
+written in type signatures). *Invariance* here means that it is
+possible to map the contents of a structure `F[A]` into `F[B]`. Using
+`identity` we can see that `A` can be safely downcast (or upcast) into
+`B` depending on the variance of the functor.
+
+`.map` may be understood by its contract "if you give me an `F` of `A` and a way
+to turn an `A` into a `B`, then I can give you an `F` of `B`".
+
+Likewise, `.contramap` reads as "if you give me an `F` of `A` and a way to turn
+a `B` into an `A`, then I can give you an `F` of `B`".
+
+We will consider an example: in our application we introduce domain specific
+types `Alpha`, `Beta`, `Gamma`, etc, to ensure that we don't mix up numbers in a
+financial calculation:
+
+{lang="text"}
+~~~~~~~~
+  final case class Alpha(value: Double)
+~~~~~~~~
+
+but now we're faced with the problem that we don't have any typeclasses for
+these new types. If we use the values in JSON documents, we have to write
+instances of `JsEncoder` and `JsDecoder`.
+
+However, `JsEncoder` has a `Contravariant` and `JsDecoder` has a `Functor`, so
+we can derive instances. Filling in the contract:
+
+-   "if you give me a `JsDecoder` for a `Double`, and a way to go from a `Double`
+    to an `Alpha`, then I can give you a `JsDecoder` for an `Alpha`".
+-   "if you give me a `JsEncoder` for a `Double`, and a way to go from an `Alpha`
+    to a `Double`, then I can give you a `JsEncoder` for an `Alpha`".
+
+{lang="text"}
+~~~~~~~~
+  object Alpha {
+    implicit val decoder: JsDecoder[Alpha] = JsDecoder[Double].map(Alpha(_))
+    implicit val encoder: JsEncoder[Alpha] = JsEncoder[Double].contramap(_.value)
+  }
+~~~~~~~~
+
+Methods on a typeclass can have their type parameters in *contravariant
+position* (method parameters) or in *covariant position* (return type). If a
+typeclass has a combination of covariant and contravariant positions, it might
+have an *invariant functor*. For example, `Semigroup` and `Monoid` have an
+`Invariant`, but not a `Functor` or a `Contravariant`.
+
+
+## Semigroupal, Apply and FlatMap
+
+Consider this the warm-up act to `Applicative` and `Monad`
+
+{width=100%}
+![](images/cats-apply.png)
+
+
+### Semigroupal
+
+`Semigroupal` looks at first sight to be similar to `Align` because it zips
+together two values in the same context
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Semigroupal[F[_]] {
+    def product[A, B](fa: F[A], fb: F[B]): F[(A, B)]
+  }
+~~~~~~~~
+
+however this is the Cartesian product, which means that every `A` is matched up
+with every `B`. Compare how `Align.align` and `Semigroupal.product` differ in this
+example
+
+{lang="text"}
+~~~~~~~~
+  scala> Align[List].align(List("a", "b", "c"), List(1,2,3,4))
+  res: List[Ior[String,Int]] = List(Both(a,1), Both(b,2), Both(c,3), Right(4))
+  
+  scala> Semigroupal[List].product(List("a", "b", "c"), List(1,2,3,4))
+  res: List[(String, Int)] = List((a,1), (a,2), (a,3), (a,4),
+                                  (b,1), (b,2), (b,3), (b,4),
+                                  (c,1), (c,2), (c,3), (c,4))
+~~~~~~~~
+
+
+### Apply
+
+`Apply` extends `Functor` and `Semigroupal` by adding a method named `.ap` which is
+similar to `.map` in that it applies a function to values. However,
+with `.ap`, the function is in the same context as the values.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Apply[F[_]] extends Functor[F] with Semigroupal[F] {
+    @op("<*>") def ap[A, B](ff: F[A => B])(fa: F[A]): F[B]
+    ...
+~~~~~~~~
+
+A> `<*>` is spoken as "the ap operator".
+
+It is worth taking a moment to consider what that means for a simple data
+structure like `Option[A]`, having the following implementation of `.ap`
+
+{lang="text"}
+~~~~~~~~
+  implicit def option[A]: Apply[Option[A]] = new Apply[Option[A]] {
+    override def ap[A, B](ff: Option[A => B], fa: Option[A])() = f match {
+      case Some(f) => fa.map(f)
+      case None    => None
+    }
+    ...
+  }
+~~~~~~~~
+
+To implement `.ap`, we must first extract the function `f: A => B` from `ff:
+Option[A => B]`, then we can map over `fa`. The extraction of the function from
+the context is the important power that `Apply` brings, allowing multiple
+function to be combined inside the context.
+
+Returning to `Apply`, we find `.mapX` boilerplate that allows us to combine
+parallel functions and then map over their combined output:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Apply[F[_]] extends Functor[F] with Semigroupal[F] {
+    ...
+    def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
+    def map3[A,B,C,D](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
+    ...
+    def map21[...]
+~~~~~~~~
+
+Read `.map2` as a contract promising: "if you give me an `F` of `A` and an `F`
+of `B`, with a way of combining `A` and `B` into a `Z`, then I can give you an
+`F` of `Z`". There are many uses for this contract and the two most important are:
+
+-   constructing some typeclasses for a product type `Z` from its constituents `A`
+    and `B`
+-   performing *effects* in parallel, like the drone and google algebras we
+    created in Chapter 3, and then combining their results.
+
+Indeed, `Apply` is so useful that it has special syntax that is worth revisiting from Chapter 3:
+
+{lang="text"}
+~~~~~~~~
+  (d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime).mapN { ... }
+~~~~~~~~
+
+where the `.mapN` method will apply `.map5` here, because the compiler knows the
+size of the tuple. We could also write
+
+or directly call `applyX`
+
+{lang="text"}
+~~~~~~~~
+  Apply[F].map5(d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime)
+~~~~~~~~
+
+`.productL` and `.productR` offer a way to ignore the output from one of two
+effects:
+
+{lang="text"}
+~~~~~~~~
+  @op("<*") def productL[A, B](fa: F[A])(fb: F[B]): F[A] = ...
+  @op("*>") def productR[A, B](fa: F[A])(fb: F[B]): F[B] = ...
+~~~~~~~~
+
+A> `<*` and `*>` are spoken "product left" and "product right".
+
+Despite being more commonly used with effects, `Apply` works just as well with
+data structures. Consider rewriting
+
+{lang="text"}
+~~~~~~~~
+  for {
+    foo <- data.foo: Option[String]
+    bar <- data.bar: Option[Int]
+  } yield foo + bar.shows
+~~~~~~~~
+
+as
+
+{lang="text"}
+~~~~~~~~
+  (data.foo, data.bar).mapN(_ + _.shows)
+~~~~~~~~
+
+If we only want the combined output as a tuple, methods exist to do
+just that:
+
+{lang="text"}
+~~~~~~~~
+  def tuple2[A,B](fa: F[A], fb: F[B]): F[(A,B)] = ...
+  def tuple3[A,B,C](fa: F[A], fb: F[B], fc: F[C]): F[(A,B,C)] = ...
+  ...
+  def tuple21[...]
+~~~~~~~~
+
+{lang="text"}
+~~~~~~~~
+  Apply[Option].tuple2(data.foo, data.bar) : Option[(String, Int)]
+~~~~~~~~
+
+
+### FlatMap
+
+`FlatMap` introduces `.flatMap` which allows functions
+over the result of an effect to return a new effect, or for functions over the
+values of a data structure to return new data structures that are then joined.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait FlatMap[F[_]] extends Apply[F] {
+  
+    @op(">>=") def flatMap[A, B](fa: F[A])(f: A => F[B]): F[B]
+  
+    def flatten[A](ffa: F[F[A]]): F[A] =
+  
+    override def map2[A, B, Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] =
+      flatMap(fa)(a => map(fb)(b => f(a, b)))
+  
+    def mproduct[A, B](fa: F[A])(f: A => F[B]): F[(A, B)] = ...
+    def ifM[B](fa: F[Boolean])(ifTrue: => F[B], ifFalse: => F[B]): F[B] = ...
+  }
+~~~~~~~~
+
+`.flatten` takes a nested context and squashes it into one.
+
+Derived combinators are introduced for `.map2` that require consistency with
+`.flatMap` ordering. We will see later that this law has consequences for
+parallelisation strategies.
+
+`.mproduct` is like `Functor.fproduct` and pairs the function's input with its
+output, inside the `F`.
+
+`.ifM` is a way to construct a conditional data structure or effect:
+
+{lang="text"}
+~~~~~~~~
+  scala> List(true, false, true).ifM(List(0), List(1, 1))
+  res: List[Int] = List(0, 1, 1, 0)
+~~~~~~~~
+
+If we want to ignore the result of the `.flatMap` effect, we can use `.flatTap`,
+analagous to `.productL`
+
+{lang="text"}
+~~~~~~~~
+  def flatTap[A, B](fa: F[A])(f: A => F[B]): F[A] = ...
+~~~~~~~~
+
+Finally `.foreverM`
+
+{lang="text"}
+~~~~~~~~
+  def foreverM[A, B](fa: F[A]): F[B] = ...
+~~~~~~~~
+
+repeating an effect without stopping. Instances of `FlatMap` are guaranteed to
+be stack safe, in the sense that we will never get a `StackOverflowError` as a
+result of calling `.foreverM`, because the tail recursive step must be
+implemented
+
+{lang="text"}
+~~~~~~~~
+  def tailRecM[A, B](a: A)(f: A => F[Either[A, B]]): F[B]
+~~~~~~~~
+
+If our love of FP is not forever, we can exit the loop
+
+{lang="text"}
+~~~~~~~~
+  def untilDefinedM[A](foa: F[Option[A]]): F[A]
+~~~~~~~~
+
+Only kidding, our love of FP **is** forever, we simply return `Some` love and
+continue FPing!
+
+
+### InvariantSemigroupal, InvariantMonoidal
+
+`InvariantSemigroupal` is a convenient typeclass that combines `Semigroupal` and
+`Invariant` without adding any new methods, simply because it is so common to do
+this.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait InvariantSemigroupal[F[_]] extends Semigroupal[F] with Invariant[F]
+~~~~~~~~
+
+That leads to `InvariantMonoidal` which introduces `.point` as a way to wrap a
+single value in a context. `.unit` is a convenience for `.point(())` (the `Unit`
+type).
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait InvariantMonoidal[F[_]] extends InvariantSemigroupal[F] {
+    def point[A](a: A): F[A]
+    def unit: F[Unit]
+  }
+~~~~~~~~
+
+{lang="text"}
+~~~~~~~~
+  scala> InvariantMonoidal[Option].point(13)
+  res: Option[Int] = Some(13)
+~~~~~~~~
+
+
+## Applicative and Monad
+
+From an API point of view, `Applicative` is `Apply` with a `.pure` method, and
+`Monad` extends `Applicative` with `FlatMap`.
+
+{width=100%}
+![](images/cats-applicative.png)
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Applicative[F[_]] extends Apply[F] with InvariantMonoidal[F] {
+    def pure[A](a: A): F[A]
+  }
+  
+  @typeclass trait Monad[F[_]] extends Applicative[F] with FlatMap[F]
+~~~~~~~~
+
+In many ways, `Applicative` and `Monad` are the culmination of everything we've
+seen in this chapter. `.pure` (aliased to `.point`) allows us to create effects
+or data structures from values.
+
+Instances of `Applicative` must meet some laws, effectively asserting
+that all the methods are consistent:
+
+-   **Identity**: `fa <*> pure(identity) === fa`, (where `fa` is an `F[A]`) i.e.
+    applying `pure(identity)` does nothing.
+-   **Homomorphism**: `pure(a) <*> pure(ab) === pure(ab(a))` (where `ab` is an `A =>
+      B`), i.e. applying a `pure` function to a `pure` value is the same as applying
+    the function to the value and then using `pure` on the result.
+-   **Interchange**: `pure(a) <*> fab === fab <*> pure(f => f(a))`, (where `fab` is
+    an `F[A => B]`), i.e. `pure` is a left and right identity
+-   **Mappy**: `map(fa)(f) === fa <*> pure(f)`
+
+`Monad` adds additional laws:
+
+-   **Left Identity**: `pure(a).flatMap(f) === f(a)`
+-   **Right Identity**: `a.flatMap(pure(_)) === a`
+-   **Associativity**: `fa.flatMap(f).flatMap(g) === fa.flatMap(a => f(a).flatMap(g))` where
+    `fa` is an `F[A]`, `f` is an `A => F[B]` and `g` is a `B => F[C]`.
+
+Associativity says that chained `flatMap` calls must agree with nested
+`flatMap`. However, it does not mean that we can rearrange the order,
+which would be *commutativity*. For example we cannot rearrange
+
+{lang="text"}
+~~~~~~~~
+  for {
+    _ <- machine.start(node1)
+    _ <- machine.stop(node1)
+  } yield true
+~~~~~~~~
+
+as
+
+{lang="text"}
+~~~~~~~~
+  for {
+    _ <- machine.stop(node1)
+    _ <- machine.start(node1)
+  } yield true
+~~~~~~~~
+
+`.start` and `.stop` are **non**-*commutative*, because the intended
+effect of starting then stopping a node is different to stopping then
+starting it!
+
+But `.start` is commutative with itself, and `.stop` is commutative with
+itself, so we can rewrite
+
+{lang="text"}
+~~~~~~~~
+  for {
+    _ <- machine.start(node1)
+    _ <- machine.start(node2)
+  } yield true
+~~~~~~~~
+
+as
+
+{lang="text"}
+~~~~~~~~
+  for {
+    _ <- machine.start(node2)
+    _ <- machine.start(node1)
+  } yield true
+~~~~~~~~
+
+which are equivalent for our algebra, but not in general. We're making a lot of
+assumptions about the Google Container API here, but this is a reasonable choice
+to make.
+
+A practical consequence is that a `Monad` must be *commutative* if its
+`applyX` methods can be allowed to run in parallel. We cheated in
+Chapter 3 when we ran these effects in parallel
+
+{lang="text"}
+~~~~~~~~
+  (d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime)
+~~~~~~~~
+
+because we know that they are commutative among themselves. When it comes to
+interpreting our application, later in the book, we will have to provide
+evidence that these effects are in fact commutative, or an asynchronous
+implementation may choose to sequence the operations to be on the safe side.
+
+The subtleties of how we deal with (re)-ordering of effects, and what
+those effects are, deserves a dedicated chapter on Advanced Monads.
+
+
+### Commutativity
+
+Now that we have discussed commutativity in the context of `Monad` we can
+understand the entire suite of `Commutative*` typeclasses in Cats: they add no
+additional methods but add the constraint that the order of effects does not
+matter.
+
+{width=100%}
+![](images/cats-commute.png)
+
+

@@ -3185,6 +3185,7 @@ digraph G {
     ApplicativeError -> Applicative;
     MonadError;
     MonadError -> ApplicativeError;
+    MonadError -> Monad;
 
     Bimonad;
     Bimonad -> Monad;
@@ -3627,16 +3628,16 @@ digraph G {
     Monad -> Applicative;
     Monad -> FlatMap;
 
-    UnorderedFoldable;
+    UnorderedFoldable [fontcolor=black,color=black];
     Foldable [fontcolor=black,color=black];
-    Foldable -> UnorderedFoldable;
+    Foldable -> UnorderedFoldable [color=black];
     Reducible [fontcolor=black,color=black];
     Reducible -> Foldable [color=black];
-    UnorderedTraverse;
+    UnorderedTraverse [fontcolor=black,color=black];
     Traverse [fontcolor=black,color=black];
     Traverse -> Functor [color=black];
     Traverse -> Foldable [color=black];
-    Traverse -> UnorderedTraverse;
+    Traverse -> UnorderedTraverse [color=black];
     NonEmptyTraverse [fontcolor=black,color=black];
     NonEmptyTraverse -> Traverse [color=black];
     NonEmptyTraverse -> Reducible [color=black];
@@ -3669,6 +3670,7 @@ digraph G {
     ApplicativeError -> Applicative;
     MonadError;
     MonadError -> ApplicativeError;
+    MonadError -> Monad;
 
     Bimonad;
     Bimonad -> Monad;
@@ -4286,11 +4288,6 @@ trait TraverseFilter[F[_]] extends FunctorFilter[F] {
 }
 #+END_SRC
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 *** Variance
 
 We must return to =Functor= for a moment and discuss an ancestor that
@@ -4304,11 +4301,11 @@ digraph G {
     edge [color=lightgray]
 
     Invariant [fontcolor=black,color=black];
-    InvariantSemigroupal [fontcolor=black,color=black];
-    InvariantSemigroupal -> Invariant [color=black];
-    Semigroupal [fontcolor=black,color=black];
-    InvariantSemigroupal -> Semigroupal [color=black];
-    InvariantMonoidal [fontcolor=black,color=black];
+    InvariantSemigroupal;
+    InvariantSemigroupal -> Invariant;
+    Semigroupal;
+    InvariantSemigroupal -> Semigroupal;
+    InvariantMonoidal;
     InvariantMonoidal -> InvariantSemigroupal;
 
     Functor [fontcolor=black,color=black];
@@ -4325,26 +4322,26 @@ digraph G {
     Monad -> Applicative;
     Monad -> FlatMap;
 
-    UnorderedFoldable;
+    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
     Foldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable -> UnorderedFoldable;
+    Foldable -> UnorderedFoldable [color=lightslategray];
     Reducible [fontcolor=lightslategray,color=lightslategray];
     Reducible -> Foldable [color=lightslategray];
-    UnorderedTraverse;
+    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
     Traverse [fontcolor=lightslategray,color=lightslategray];
     Traverse -> Functor [color=lightslategray];
     Traverse -> Foldable [color=lightslategray];
-    Traverse -> UnorderedTraverse;
+    Traverse -> UnorderedTraverse [color=lightslategray];
     NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
     NonEmptyTraverse -> Traverse [color=lightslategray];
     NonEmptyTraverse -> Reducible [color=lightslategray];
 
     Contravariant [fontcolor=black,color=black];
     Contravariant -> Invariant [color=black];
-    ContravariantSemigroupal [fontcolor=black,color=black];
+    ContravariantSemigroupal;
     ContravariantSemigroupal -> InvariantSemigroupal;
     ContravariantSemigroupal -> Contravariant;
-    ContravariantMonoidal [fontcolor=black,color=black];
+    ContravariantMonoidal;
     ContravariantMonoidal -> InvariantMonoidal;
     ContravariantMonoidal -> ContravariantSemigroupal;
 
@@ -4367,6 +4364,7 @@ digraph G {
     ApplicativeError -> Applicative;
     MonadError;
     MonadError -> ApplicativeError;
+    MonadError -> Monad;
 
     Bimonad;
     Bimonad -> Monad;
@@ -4398,29 +4396,29 @@ digraph G {
 =Invariant= has a method =.imap= which says that given a function from =A= to
 =B=, and a function from =B= to =A=, then we can convert =F[A]= to =F[B]=.
 
-=Functor= is a short name for what should be /covariant functor/. But
-since =Functor= is so popular it gets the nickname. Likewise
-=Contravariant= should really be /contravariant functor/.
+=Functor= is a short name for what should be /covariant functor/. But since
+=Functor= is so popular it gets the nickname. Likewise =Contravariant= should
+really be /contravariant functor/, and =Invariant= an /invariant functor/.
 
-=Functor= implements =xmap= with =map= and ignores the function from
-=B= to =A=. =Contravariant=, on the other hand, implements =xmap= with
-=contramap= and ignores the function from =A= to =B=:
+=Functor= implements =.imap= with =.map= and ignores the function from
+=B= to =A=. =Contravariant=, on the other hand, implements =.imap= with
+=.contramap= and ignores the function from =A= to =B=:
 
 #+BEGIN_SRC scala
-@typeclass trait InvariantFunctor[F[_]] {
-  def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B]
+@typeclass trait Invariant[F[_]] {
+  def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B]
   ...
 }
 
-@typeclass trait Functor[F[_]] extends InvariantFunctor[F] {
+@typeclass trait Functor[F[_]] extends Invariant[F] {
   def map[A, B](fa: F[A])(f: A => B): F[B]
-  def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = map(fa)(f)
+  def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = map(fa)(f)
   ...
 }
 
-@typeclass trait Contravariant[F[_]] extends InvariantFunctor[F] {
+@typeclass trait Contravariant[F[_]] extends Invariant[F] {
   def contramap[A, B](fa: F[A])(f: B => A): F[B]
-  def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = contramap(fa)(g)
+  def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = contramap(fa)(g)
   ...
 }
 #+END_SRC
@@ -4433,11 +4431,11 @@ possible to map the contents of a structure =F[A]= into =F[B]=. Using
 =identity= we can see that =A= can be safely downcast (or upcast) into
 =B= depending on the variance of the functor.
 
-=.map= may be understand by its contract "if you give me an =F= of =A= and a way
+=.map= may be understood by its contract "if you give me an =F= of =A= and a way
 to turn an =A= into a =B=, then I can give you an =F= of =B=".
 
 Likewise, =.contramap= reads as "if you give me an =F= of =A= and a way to turn
-a =B= into a =A=, then I can give you an =F= of =B=".
+a =B= into an =A=, then I can give you an =F= of =B=".
 
 We will consider an example: in our application we introduce domain specific
 types =Alpha=, =Beta=, =Gamma=, etc, to ensure that we don't mix up numbers in a
@@ -4470,105 +4468,151 @@ Methods on a typeclass can have their type parameters in /contravariant
 position/ (method parameters) or in /covariant position/ (return type). If a
 typeclass has a combination of covariant and contravariant positions, it might
 have an /invariant functor/. For example, =Semigroup= and =Monoid= have an
-=InvariantFunctor=, but not a =Functor= or a =Contravariant=.
+=Invariant=, but not a =Functor= or a =Contravariant=.
 
-*** Apply and Bind
-
-TODO
-
-
-
+*** Semigroupal, Apply and FlatMap
 
 Consider this the warm-up act to =Applicative= and =Monad=
 
-#+BEGIN_SRC dot :file images/scalaz-apply.png :exports results
+#+BEGIN_SRC dot :file images/cats-apply.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Cobind;
-    Comonad;
-    Bind [fontcolor=black,color=black];
-    Apply [fontcolor=black,color=black];
-    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Invariant [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal [fontcolor=black,color=black];
+    InvariantSemigroupal -> Invariant [color=black];
+    Semigroupal [fontcolor=black,color=black];
+    InvariantSemigroupal -> Semigroupal [color=black];
+    InvariantMonoidal [fontcolor=black,color=black];
+    InvariantMonoidal -> InvariantSemigroupal [color=black];
+
     Functor [fontcolor=lightslategray,color=lightslategray];
-    InvariantFunctor [fontcolor=lightslategray,color=lightslategray];
-    Functor;
-    Divide;
-    Divisible;
-    Apply;
-    Align [fontcolor=lightslategray,color=lightslategray];
-    Applicative;
-    Foldable1 [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse1 [fontcolor=lightslategray,color=lightslategray];
-    Monad;
-    "Advanced Monads" [style=dashed];
-    Plus;
-    PlusEmpty;
-    IsEmpty;
-    ApplicativePlus;
-    MonadPlus;
-
-    Cobind -> Functor;
-    Comonad -> Cobind;
-
-    Bind -> Apply [color=black];
-
-    Contravariant -> InvariantFunctor [color=lightslategray];
-    Functor -> InvariantFunctor [color=lightslategray];
-
-    Divide -> Contravariant;
-    Divisible -> Divide;
+    Functor -> Invariant [color=lightslategray];
+    Apply [fontcolor=black,color=black];
+    Apply -> InvariantSemigroupal [color=black];
     Apply -> Functor [color=black];
+    Applicative;
     Applicative -> Apply;
+    Applicative -> InvariantMonoidal;
+    FlatMap [fontcolor=black,color=black];
+    FlatMap -> Apply [color=black];
+    Monad;
+    Monad -> Applicative;
+    Monad -> FlatMap;
 
-    Align -> Functor [color=lightslategray];
-
-    Foldable1 -> Foldable [color=lightslategray];
+    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
+    Foldable [fontcolor=lightslategray,color=lightslategray];
+    Foldable -> UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
+    Reducible [fontcolor=lightslategray,color=lightslategray];
+    Reducible -> Foldable [color=lightslategray];
+    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
+    Traverse [fontcolor=lightslategray,color=lightslategray];
     Traverse -> Functor [color=lightslategray];
     Traverse -> Foldable [color=lightslategray];
-    Traverse1 -> Traverse [color=lightslategray];
-    Traverse1 -> Foldable1 [color=lightslategray];
+    Traverse -> UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
+    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
+    NonEmptyTraverse -> Traverse [color=lightslategray];
+    NonEmptyTraverse -> Reducible [color=lightslategray];
 
-    Monad -> Applicative;
-    "Advanced Monads" -> Monad;
-    Monad -> Bind;
+    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    ContravariantSemigroupal [fontcolor=black,color=black];
+    ContravariantSemigroupal -> InvariantSemigroupal [color=black];
+    ContravariantSemigroupal -> Contravariant [color=black];
+    ContravariantMonoidal;
+    ContravariantMonoidal -> InvariantMonoidal;
+    ContravariantMonoidal -> ContravariantSemigroupal;
 
-    PlusEmpty -> Plus;
-    IsEmpty -> PlusEmpty;
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
 
-    ApplicativePlus -> Applicative;
-    ApplicativePlus -> PlusEmpty;
-    MonadPlus -> ApplicativePlus;
-    MonadPlus -> Monad;
+    Distributive;
+    Distributive -> Functor;
+
+    SemigroupK;
+    MonoidK;
+    MonoidK -> SemigroupK;
+    Alternative;
+    Alternative -> Applicative;
+    Alternative -> MonoidK;
+
+    ApplicativeError;
+    ApplicativeError -> Applicative;
+    MonadError;
+    MonadError -> ApplicativeError;
+    MonadError -> Monad;
+
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    StackSafeMonad;
+    StackSafeMonad -> Monad;
+
+    CommutativeApply;
+    CommutativeApply -> Apply;
+    CommutativeApplicative;
+    CommutativeApplicative -> Applicative;
+    CommutativeApplicative -> CommutativeApply;
+    CommutativeFlatMap;
+    CommutativeFlatMap -> FlatMap;
+    CommutativeFlatMap -> CommutativeApply;
+    CommutativeMonad;
+    CommutativeMonad -> Monad;
+    CommutativeMonad -> CommutativeFlatMap;
+    CommutativeMonad -> CommutativeApplicative;
+
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-apply.png]]
+[[file:images/cats-apply.png]]
+
+**** Semigroupal
+
+=Semigroupal= looks at first sight to be similar to =Align= because it zips
+together two values in the same context
+
+#+BEGIN_SRC scala
+@typeclass trait Semigroupal[F[_]] {
+  def product[A, B](fa: F[A], fb: F[B]): F[(A, B)]
+}
+#+END_SRC
+
+however this is the Cartesian product, which means that every =A= is matched up
+with every =B=. Compare how =Align.align= and =Semigroupal.product= differ in this
+example
+
+#+BEGIN_SRC scala
+scala> Align[List].align(List("a", "b", "c"), List(1,2,3,4))
+res: List[Ior[String,Int]] = List(Both(a,1), Both(b,2), Both(c,3), Right(4))
+
+scala> Semigroupal[List].product(List("a", "b", "c"), List(1,2,3,4))
+res: List[(String, Int)] = List((a,1), (a,2), (a,3), (a,4),
+                                (b,1), (b,2), (b,3), (b,4),
+                                (c,1), (c,2), (c,3), (c,4))
+#+END_SRC
 
 **** Apply
 
-=Apply= extends =Functor= by adding a method named =ap= which is
-similar to =map= in that it applies a function to values. However,
-with =ap=, the function is in the same context as the values.
+=Apply= extends =Functor= and =Semigroupal= by adding a method named =.ap= which is
+similar to =.map= in that it applies a function to values. However,
+with =.ap=, the function is in the same context as the values.
 
 #+BEGIN_SRC scala
-@typeclass trait Apply[F[_]] extends Functor[F] {
-  @op("<*>") def ap[A, B](fa: =>F[A])(f: =>F[A => B]): F[B]
+@typeclass trait Apply[F[_]] extends Functor[F] with Semigroupal[F] {
+  @op("<*>") def ap[A, B](ff: F[A => B])(fa: F[A]): F[B]
   ...
 #+END_SRC
 
-# https://mobile.twitter.com/mrkgrnao/status/962030468093767681
-
 #+BEGIN_ASIDE
-~<*>~ is the Advanced TIE Fighter, as flown by Darth Vader. Appropriate since it
-looks like an angry parent. Or a sad Pikachu.
+~<*>~ is spoken as "the ap operator".
 #+END_ASIDE
 
 It is worth taking a moment to consider what that means for a simple data
@@ -4576,102 +4620,66 @@ structure like =Option[A]=, having the following implementation of =.ap=
 
 #+BEGIN_SRC scala
 implicit def option[A]: Apply[Option[A]] = new Apply[Option[A]] {
-  override def ap[A, B](fa: =>Option[A])(f: =>Option[A => B]) = f match {
-    case Some(ff) => fa.map(ff)
+  override def ap[A, B](ff: Option[A => B], fa: Option[A])() = f match {
+    case Some(f) => fa.map(f)
     case None    => None
   }
   ...
 }
 #+END_SRC
 
-To implement ~.ap~, we must first extract the function ~ff: A => B~ from ~f:
+To implement ~.ap~, we must first extract the function ~f: A => B~ from ~ff:
 Option[A => B]~, then we can map over ~fa~. The extraction of the function from
 the context is the important power that ~Apply~ brings, allowing multiple
 function to be combined inside the context.
 
-Returning to =Apply=, we find =.applyX= boilerplate that allows us to combine
+Returning to =Apply=, we find =.mapX= boilerplate that allows us to combine
 parallel functions and then map over their combined output:
 
 #+BEGIN_SRC scala
-@typeclass trait Apply[F[_]] extends Functor[F] {
+@typeclass trait Apply[F[_]] extends Functor[F] with Semigroupal[F] {
   ...
-  def apply2[A,B,C](fa: =>F[A], fb: =>F[B])(f: (A, B) => C): F[C] = ...
-  def apply3[A,B,C,D](fa: =>F[A],fb: =>F[B],fc: =>F[C])(f: (A,B,C) =>D): F[D] = ...
+  def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
+  def map3[A,B,C,D](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
   ...
-  def apply12[...]
+  def map21[...]
 #+END_SRC
 
-Read =.apply2= as a contract promising: "if you give me an =F= of =A= and an =F=
-of =B=, with a way of combining =A= and =B= into a =C=, then I can give you an
-=F= of =C=". There are many uses for this contract and the two most important are:
+Read =.map2= as a contract promising: "if you give me an =F= of =A= and an =F=
+of =B=, with a way of combining =A= and =B= into a =Z=, then I can give you an
+=F= of =Z=". There are many uses for this contract and the two most important are:
 
-- constructing some typeclasses for a product type =C= from its constituents =A=
+- constructing some typeclasses for a product type =Z= from its constituents =A=
   and =B=
 - performing /effects/ in parallel, like the drone and google algebras we
   created in Chapter 3, and then combining their results.
 
-Indeed, =Apply= is so useful that it has special syntax:
+Indeed, =Apply= is so useful that it has special syntax that is worth revisiting from Chapter 3:
 
 #+BEGIN_SRC scala
-implicit class ApplyOps[F[_]: Apply, A](self: F[A]) {
-  def *>[B](fb: F[B]): F[B] = Apply[F].apply2(self,fb)((_,b) => b)
-  def <*[B](fb: F[B]): F[A] = Apply[F].apply2(self,fb)((a,_) => a)
-  def |@|[B](fb: F[B]): ApplicativeBuilder[F, A, B] = ...
-}
-
-class ApplicativeBuilder[F[_]: Apply, A, B](a: F[A], b: F[B]) {
-  def tupled: F[(A, B)] = Apply[F].apply2(a, b)(Tuple2(_))
-  def |@|[C](cc: F[C]): ApplicativeBuilder3[C] = ...
-
-  sealed abstract class ApplicativeBuilder3[C](c: F[C]) {
-    ..ApplicativeBuilder4
-      ...
-        ..ApplicativeBuilder12
-}
+(d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime).mapN { ... }
 #+END_SRC
 
-which is exactly what we used in Chapter 3:
-
-#+BEGIN_SRC scala
-(d.getBacklog |@| d.getAgents |@| m.getManaged |@| m.getAlive |@| m.getTime)
-#+END_SRC
-
-#+BEGIN_ASIDE
-The =|@|= operator has many names. Some call it the /Cartesian Product Syntax/,
-others call it the /Cinnamon Bun/, the /Admiral Ackbar/ or the /Macaulay
-Culkin/. We prefer to call it /The Scream/ operator, after the Munch painting,
-because it is also the sound our CPU makes when it is parallelising All The
-Things.
-#+END_ASIDE
-
-The syntax =<*= and =*>= (left bird and right bird) offer a convenient way to
-ignore the output from one of two parallel effects.
-
-Unfortunately, although the =|@|= syntax is clear, there is a problem
-in that a new =ApplicativeBuilder= object is allocated for each
-additional effect. If the work is I/O-bound, the memory allocation
-cost is insignificant. However, when performing CPU-bound work, use
-the alternative /lifting with arity/ syntax, which does not produce
-any intermediate objects:
-
-#+BEGIN_SRC scala
-def ^[F[_]: Apply,A,B,C](fa: =>F[A],fb: =>F[B])(f: (A,B) =>C): F[C] = ...
-def ^^[F[_]: Apply,A,B,C,D](fa: =>F[A],fb: =>F[B],fc: =>F[C])(f: (A,B,C) =>D): F[D] = ...
-...
-def ^^^^^^[F[_]: Apply, ...]
-#+END_SRC
-
-used like
-
-#+BEGIN_SRC scala
-^^^^(d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime)
-#+END_SRC
+where the =.mapN= method will apply =.map5= here, because the compiler knows the
+size of the tuple. We could also write
 
 or directly call =applyX=
 
 #+BEGIN_SRC scala
-Apply[F].apply5(d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime)
+Apply[F].map5(d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime)
 #+END_SRC
+
+=.productL= and =.productR= offer a way to ignore the output from one of two
+effects:
+
+#+BEGIN_SRC scala
+  @op("<*") def productL[A, B](fa: F[A])(fb: F[B]): F[A] = ...
+  @op("*>") def productR[A, B](fa: F[A])(fb: F[B]): F[B] = ...
+#+END_SRC
+
+#+BEGIN_ASIDE
+=<*= and =*>= are spoken "product left" and "product right".
+#+END_ASIDE
 
 Despite being more commonly used with effects, =Apply= works just as well with
 data structures. Consider rewriting
@@ -4686,7 +4694,7 @@ data structures. Consider rewriting
 as
 
 #+BEGIN_SRC scala
-(data.foo |@| data.bar)(_ + _.shows)
+(data.foo, data.bar).mapN(_ + _.shows)
 
 #+END_SRC
 
@@ -4694,221 +4702,225 @@ If we only want the combined output as a tuple, methods exist to do
 just that:
 
 #+BEGIN_SRC scala
-  @op("tuple") def tuple2[A,B](fa: =>F[A],fb: =>F[B]): F[(A,B)] = ...
-  def tuple3[A,B,C](fa: =>F[A],fb: =>F[B],fc: =>F[C]): F[(A,B,C)] = ...
+  def tuple2[A,B](fa: F[A], fb: F[B]): F[(A,B)] = ...
+  def tuple3[A,B,C](fa: F[A], fb: F[B], fc: F[C]): F[(A,B,C)] = ...
   ...
-  def tuple12[...]
+  def tuple21[...]
 #+END_SRC
 
 #+BEGIN_SRC scala
-(data.foo tuple data.bar) : Option[(String, Int)]
+Apply[Option].tuple2(data.foo, data.bar) : Option[(String, Int)]
 #+END_SRC
 
-There are also the generalised versions of =ap= for more than two
-parameters:
+**** FlatMap
 
-#+BEGIN_SRC scala
-  def ap2[A,B,C](fa: =>F[A],fb: =>F[B])(f: F[(A,B) => C]): F[C] = ...
-  def ap3[A,B,C,D](fa: =>F[A],fb: =>F[B],fc: =>F[C])(f: F[(A,B,C) => D]): F[D] = ...
-  ...
-  def ap12[...]
-#+END_SRC
-
-along with =.lift= methods that take normal functions and lift them into the
-=F[_]= context, the generalisation of =Functor.lift=
-
-#+BEGIN_SRC scala
-  def lift2[A,B,C](f: (A,B) => C): (F[A],F[B]) => F[C] = ...
-  def lift3[A,B,C,D](f: (A,B,C) => D): (F[A],F[B],F[C]) => F[D] = ...
-  ...
-  def lift12[...]
-#+END_SRC
-
-and =.apF=, a partially applied syntax for =ap=
-
-#+BEGIN_SRC scala
-  def apF[A,B](f: =>F[A => B]): F[A] => F[B] = ...
-#+END_SRC
-
-Finally =.forever=
-
-#+BEGIN_SRC scala
-  def forever[A, B](fa: F[A]): F[B] = ...
-#+END_SRC
-
-repeating an effect without stopping. The instance of =Apply= must be
-stack safe or we will get =StackOverflowError=.
-
-**** Bind
-
-=Bind= introduces =.bind=, synonymous with =.flatMap=, which allows functions
+=FlatMap= introduces =.flatMap= which allows functions
 over the result of an effect to return a new effect, or for functions over the
 values of a data structure to return new data structures that are then joined.
 
 #+BEGIN_SRC scala
-@typeclass trait Bind[F[_]] extends Apply[F] {
+@typeclass trait FlatMap[F[_]] extends Apply[F] {
 
-  @op(">>=") def bind[A, B](fa: F[A])(f: A => F[B]): F[B]
-  def flatMap[A, B](fa: F[A])(f: A => F[B]): F[B] = bind(fa)(f)
+  @op(">>=") def flatMap[A, B](fa: F[A])(f: A => F[B]): F[B]
 
-  override def ap[A, B](fa: =>F[A])(f: =>F[A => B]): F[B] =
-    bind(f)(x => map(fa)(x))
-  override def apply2[A, B, C](fa: =>F[A], fb: =>F[B])(f: (A, B) => C): F[C] =
-    bind(fa)(a => map(fb)(b => f(a, b)))
+  def flatten[A](ffa: F[F[A]]): F[A] =
 
-  def join[A](ffa: F[F[A]]): F[A] = bind(ffa)(identity)
+  override def map2[A, B, Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] =
+    flatMap(fa)(a => map(fb)(b => f(a, b)))
 
   def mproduct[A, B](fa: F[A])(f: A => F[B]): F[(A, B)] = ...
-  def ifM[B](value: F[Boolean], t: =>F[B], f: =>F[B]): F[B] = ...
-
+  def ifM[B](fa: F[Boolean])(ifTrue: => F[B], ifFalse: => F[B]): F[B] = ...
 }
 #+END_SRC
 
-The =.join= may be familiar to users of =.flatten= in the stdlib, it takes a
-nested context and squashes it into one.
+=.flatten= takes a nested context and squashes it into one.
 
-Derived combinators are introduced for =.ap= and =.apply2= that require
-consistency with =.bind=. We will see later that this law has consequences for
+Derived combinators are introduced for =.map2= that require consistency with
+=.flatMap= ordering. We will see later that this law has consequences for
 parallelisation strategies.
 
-=mproduct= is like =Functor.fproduct= and pairs the function's input
-with its output, inside the =F=.
+=.mproduct= is like =Functor.fproduct= and pairs the function's input with its
+output, inside the =F=.
 
-=ifM= is a way to construct a conditional data structure or effect:
+=.ifM= is a way to construct a conditional data structure or effect:
 
 #+BEGIN_SRC scala
 scala> List(true, false, true).ifM(List(0), List(1, 1))
 res: List[Int] = List(0, 1, 1, 0)
 #+END_SRC
 
-=ifM= and =ap= are optimised to cache and reuse code branches, compare
-to the longer form
+If we want to ignore the result of the =.flatMap= effect, we can use =.flatTap=,
+analagous to =.productL=
 
 #+BEGIN_SRC scala
-scala> List(true, false, true).flatMap { b => if (b) List(0) else List(1, 1) }
+  def flatTap[A, B](fa: F[A])(f: A => F[B]): F[A] = ...
 #+END_SRC
 
-which produces a fresh =List(0)= or =List(1, 1)= every time the branch
-is invoked.
-
-#+BEGIN_ASIDE
-These kinds of optimisations are possible in FP because all methods
-are deterministic, also known as /referentially transparent/.
-
-If a method returns a different value every time it is called, it is
-/impure/ and breaks the reasoning and optimisations that we can
-otherwise make.
-
-If the =F= is an effect, perhaps one of our drone or Google algebras,
-it does not mean that the output of the call to the algebra is cached.
-Rather the reference to the operation is cached. The performance
-optimisation of =ifM= is only noticeable for data structures, and more
-pronounced with the difficulty of the work in each branch.
-
-We will explore the concept of determinism and value caching in more
-detail in the next chapter.
-#+END_ASIDE
-
-=Bind= also has some special syntax
+Finally =.foreverM=
 
 #+BEGIN_SRC scala
-implicit class BindOps[F[_]: Bind, A] (self: F[A]) {
-  def >>[B](b: =>F[B]): F[B] = Bind[F].bind(self)(_ => b)
-  def >>![B](f: A => F[B]): F[A] = Bind[F].bind(self)(a => f(a).map(_ => a))
+  def foreverM[A, B](fa: F[A]): F[B] = ...
+#+END_SRC
+
+repeating an effect without stopping. Instances of =FlatMap= are guaranteed to
+be stack safe, in the sense that we will never get a =StackOverflowError= as a
+result of calling =.foreverM=, because the tail recursive step must be
+implemented
+
+#+BEGIN_SRC scala
+  def tailRecM[A, B](a: A)(f: A => F[Either[A, B]]): F[B]
+#+END_SRC
+
+If our love of FP is not forever, we can exit the loop
+
+#+BEGIN_SRC scala
+def untilDefinedM[A](foa: F[Option[A]]): F[A]
+#+END_SRC
+
+Only kidding, our love of FP *is* forever, we simply return =Some= love and
+continue FPing!
+
+**** InvariantSemigroupal, InvariantMonoidal
+
+=InvariantSemigroupal= is a convenient typeclass that combines =Semigroupal= and
+=Invariant= without adding any new methods, simply because it is so common to do
+this.
+
+#+BEGIN_SRC scala
+@typeclass trait InvariantSemigroupal[F[_]] extends Semigroupal[F] with Invariant[F]
+#+END_SRC
+
+That leads to =InvariantMonoidal= which introduces =.point= as a way to wrap a
+single value in a context. =.unit= is a convenience for =.point(())= (the =Unit=
+type).
+
+#+BEGIN_SRC scala
+@typeclass trait InvariantMonoidal[F[_]] extends InvariantSemigroupal[F] {
+  def point[A](a: A): F[A]
+  def unit: F[Unit]
 }
 #+END_SRC
 
-=>>= is when we wish to discard the input to =bind= and =>>!= is when
-we want to run an effect but discard its output.
+#+BEGIN_SRC scala
+scala> InvariantMonoidal[Option].point(13)
+res: Option[Int] = Some(13)
+#+END_SRC
 
 *** Applicative and Monad
 
-From a functionality point of view, =Applicative= is =Apply= with a
-=pure= method, and =Monad= extends =Applicative= with =Bind=.
+From an API point of view, =Applicative= is =Apply= with a =.pure= method, and
+=Monad= extends =Applicative= with =FlatMap=.
 
-#+BEGIN_SRC dot :file images/scalaz-applicative.png :exports results
+#+BEGIN_SRC dot :file images/cats-applicative.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Cobind;
-    Comonad;
-    Bind [fontcolor=lightslategray,color=lightslategray];
-    Apply [fontcolor=lightslategray,color=lightslategray];
-    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Invariant [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Invariant [color=lightslategray];
+    Semigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Semigroupal [color=lightslategray];
+    InvariantMonoidal [fontcolor=lightslategray,color=lightslategray];
+    InvariantMonoidal -> InvariantSemigroupal [color=lightslategray];
+
     Functor [fontcolor=lightslategray,color=lightslategray];
-    InvariantFunctor [fontcolor=lightslategray,color=lightslategray];
-    Functor;
-    Divide;
-    Divisible;
-    Apply;
-    Align [fontcolor=lightslategray,color=lightslategray];
-    Applicative [fontcolor=black,color=black];
-    Foldable1 [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse1 [fontcolor=lightslategray,color=lightslategray];
-    Monad [fontcolor=black,color=black];
-    "Advanced Monads" [style=dashed];
-    Plus;
-    PlusEmpty;
-    IsEmpty;
-    ApplicativePlus;
-    MonadPlus;
-
-    Bind -> Apply [color=lightslategray];
-
-    Contravariant -> InvariantFunctor [color=lightslategray];
-    Functor -> InvariantFunctor [color=lightslategray];
-
-    Divide -> Contravariant;
-    Divisible -> Divide;
+    Functor -> Invariant [color=lightslategray];
+    Apply [fontcolor=lightslategray,color=lightslategray];
+    Apply -> InvariantSemigroupal [color=lightslategray];
     Apply -> Functor [color=lightslategray];
+    Applicative [fontcolor=black,color=black];
     Applicative -> Apply [color=black];
+    Applicative -> InvariantMonoidal [color=black];
+    FlatMap [fontcolor=lightslategray,color=lightslategray];
+    FlatMap -> Apply [color=lightslategray];
+    Monad [fontcolor=black,color=black];
+    Monad -> Applicative [color=black];
+    Monad -> FlatMap [color=black];
 
-    Foldable1 -> Foldable [color=lightslategray];
+    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
+    Foldable [fontcolor=lightslategray,color=lightslategray];
+    Foldable -> UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
+    Reducible [fontcolor=lightslategray,color=lightslategray];
+    Reducible -> Foldable [color=lightslategray];
+    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
+    Traverse [fontcolor=lightslategray,color=lightslategray];
     Traverse -> Functor [color=lightslategray];
     Traverse -> Foldable [color=lightslategray];
-    Traverse1 -> Traverse [color=lightslategray];
-    Traverse1 -> Foldable1 [color=lightslategray];
+    Traverse -> UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
+    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
+    NonEmptyTraverse -> Traverse [color=lightslategray];
+    NonEmptyTraverse -> Reducible [color=lightslategray];
 
-    Monad -> Applicative [color=black];
-    "Advanced Monads" -> Monad;
-    Monad -> Bind [color=black];
+    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    ContravariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    ContravariantSemigroupal -> InvariantSemigroupal [color=lightslategray];
+    ContravariantSemigroupal -> Contravariant [color=lightslategray];
+    ContravariantMonoidal;
+    ContravariantMonoidal -> InvariantMonoidal;
+    ContravariantMonoidal -> ContravariantSemigroupal;
 
-    Cobind -> Functor;
-    Comonad -> Cobind;
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
 
-    PlusEmpty -> Plus;
-    IsEmpty -> PlusEmpty;
+    Distributive;
+    Distributive -> Functor;
 
-    ApplicativePlus -> Applicative;
-    ApplicativePlus -> PlusEmpty;
-    MonadPlus -> ApplicativePlus;
-    MonadPlus -> Monad;
+    SemigroupK;
+    MonoidK;
+    MonoidK -> SemigroupK;
+    Alternative;
+    Alternative -> Applicative;
+    Alternative -> MonoidK;
 
-    Align -> Functor [color=lightslategray];
+    ApplicativeError;
+    ApplicativeError -> Applicative;
+    MonadError;
+    MonadError -> ApplicativeError;
+    MonadError -> Monad;
+
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    StackSafeMonad;
+    StackSafeMonad -> Monad;
+
+    CommutativeApply;
+    CommutativeApply -> Apply;
+    CommutativeApplicative;
+    CommutativeApplicative -> Applicative;
+    CommutativeApplicative -> CommutativeApply;
+    CommutativeFlatMap;
+    CommutativeFlatMap -> FlatMap;
+    CommutativeFlatMap -> CommutativeApply;
+    CommutativeMonad;
+    CommutativeMonad -> Monad;
+    CommutativeMonad -> CommutativeFlatMap;
+    CommutativeMonad -> CommutativeApplicative;
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-applicative.png]]
+[[file:images/cats-applicative.png]]
 
 #+BEGIN_SRC scala
-@typeclass trait Applicative[F[_]] extends Apply[F] {
-  def point[A](a: =>A): F[A]
-  def pure[A](a: =>A): F[A] = point(a)
+@typeclass trait Applicative[F[_]] extends Apply[F] with InvariantMonoidal[F] {
+  def pure[A](a: A): F[A]
 }
 
-@typeclass trait Monad[F[_]] extends Applicative[F] with Bind[F]
+@typeclass trait Monad[F[_]] extends Applicative[F] with FlatMap[F]
 #+END_SRC
 
 In many ways, =Applicative= and =Monad= are the culmination of everything we've
-seen in this chapter. =.pure= (or =.point= as it is more commonly known for data
-structures) allows us to create effects or data structures from values.
+seen in this chapter. =.pure= (aliased to =.point=) allows us to create effects
+or data structures from values.
 
 Instances of =Applicative= must meet some laws, effectively asserting
 that all the methods are consistent:
@@ -4924,15 +4936,14 @@ that all the methods are consistent:
 
 =Monad= adds additional laws:
 
-- *Left Identity*: ~pure(a).bind(f) === f(a)~
-- *Right Identity*: ~a.bind(pure(_)) === a~
-- *Associativity*: ~fa.bind(f).bind(g) === fa.bind(a => f(a).bind(g))~ where
+- *Left Identity*: ~pure(a).flatMap(f) === f(a)~
+- *Right Identity*: ~a.flatMap(pure(_)) === a~
+- *Associativity*: ~fa.flatMap(f).flatMap(g) === fa.flatMap(a => f(a).flatMap(g))~ where
   ~fa~ is an ~F[A]~, ~f~ is an ~A => F[B]~ and ~g~ is a ~B => F[C]~.
 
-Associativity says that chained =bind= calls must agree with nested
-=bind=. However, it does not mean that we can rearrange the order,
-which would be /commutativity/. For example, recalling that =flatMap=
-is an alias to =bind=, we cannot rearrange
+Associativity says that chained =flatMap= calls must agree with nested
+=flatMap=. However, it does not mean that we can rearrange the order,
+which would be /commutativity/. For example we cannot rearrange
 
 #+BEGIN_SRC scala
 for {
@@ -4950,11 +4961,11 @@ for {
 } yield true
 #+END_SRC
 
-=start= and =stop= are *non*-/commutative/, because the intended
+=.start= and =.stop= are *non*-/commutative/, because the intended
 effect of starting then stopping a node is different to stopping then
 starting it!
 
-But =start= is commutative with itself, and =stop= is commutative with
+But =.start= is commutative with itself, and =.stop= is commutative with
 itself, so we can rewrite
 
 #+BEGIN_SRC scala
@@ -4982,7 +4993,7 @@ A practical consequence is that a =Monad= must be /commutative/ if its
 Chapter 3 when we ran these effects in parallel
 
 #+BEGIN_SRC scala
-(d.getBacklog |@| d.getAgents |@| m.getManaged |@| m.getAlive |@| m.getTime)
+(d.getBacklog, d.getAgents, m.getManaged, m.getAlive, m.getTime)
 #+END_SRC
 
 because we know that they are commutative among themselves. When it comes to
@@ -4992,6 +5003,117 @@ implementation may choose to sequence the operations to be on the safe side.
 
 The subtleties of how we deal with (re)-ordering of effects, and what
 those effects are, deserves a dedicated chapter on Advanced Monads.
+
+**** Commutativity
+
+Now that we have discussed commutativity in the context of =Monad= we can
+understand the entire suite of =Commutative*= typeclasses in Cats: they add no
+additional methods but add the constraint that the order of effects does not
+matter.
+
+#+BEGIN_SRC dot :file images/cats-commute.png :exports results
+digraph G {
+    graph [dpi=300, rankdir=BT];
+    node [fontname=Hack];
+    node [fontcolor=lightgray,color=lightgray];
+    edge [color=lightgray]
+
+    Invariant [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Invariant [color=lightslategray];
+    Semigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Semigroupal [color=lightslategray];
+    InvariantMonoidal [fontcolor=lightslategray,color=lightslategray];
+    InvariantMonoidal -> InvariantSemigroupal [color=lightslategray];
+
+    Functor [fontcolor=lightslategray,color=lightslategray];
+    Functor -> Invariant [color=lightslategray];
+    Apply [fontcolor=lightslategray,color=lightslategray];
+    Apply -> InvariantSemigroupal [color=lightslategray];
+    Apply -> Functor [color=lightslategray];
+    Applicative [fontcolor=lightslategray,color=lightslategray];
+    Applicative -> Apply [color=lightslategray];
+    Applicative -> InvariantMonoidal [color=lightslategray];
+    FlatMap [fontcolor=lightslategray,color=lightslategray];
+    FlatMap -> Apply [color=lightslategray];
+    Monad [fontcolor=lightslategray,color=lightslategray];
+    Monad -> Applicative [color=lightslategray];
+    Monad -> FlatMap [color=lightslategray];
+
+    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
+    Foldable [fontcolor=lightslategray,color=lightslategray];
+    Foldable -> UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
+    Reducible [fontcolor=lightslategray,color=lightslategray];
+    Reducible -> Foldable [color=lightslategray];
+    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
+    Traverse [fontcolor=lightslategray,color=lightslategray];
+    Traverse -> Functor [color=lightslategray];
+    Traverse -> Foldable [color=lightslategray];
+    Traverse -> UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
+    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
+    NonEmptyTraverse -> Traverse [color=lightslategray];
+    NonEmptyTraverse -> Reducible [color=lightslategray];
+
+    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    ContravariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    ContravariantSemigroupal -> InvariantSemigroupal [color=lightslategray];
+    ContravariantSemigroupal -> Contravariant [color=lightslategray];
+    ContravariantMonoidal;
+    ContravariantMonoidal -> InvariantMonoidal;
+    ContravariantMonoidal -> ContravariantSemigroupal;
+
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
+
+    Distributive;
+    Distributive -> Functor;
+
+    SemigroupK;
+    MonoidK;
+    MonoidK -> SemigroupK;
+    Alternative;
+    Alternative -> Applicative;
+    Alternative -> MonoidK;
+
+    ApplicativeError;
+    ApplicativeError -> Applicative;
+    MonadError;
+    MonadError -> ApplicativeError;
+    MonadError -> Monad;
+
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    StackSafeMonad;
+    StackSafeMonad -> Monad;
+
+    CommutativeApply [fontcolor=black,color=black];
+    CommutativeApply -> Apply [color=black];
+    CommutativeApplicative [fontcolor=black,color=black];
+    CommutativeApplicative -> Applicative [color=black];
+    CommutativeApplicative -> CommutativeApply [color=black];
+    CommutativeFlatMap [fontcolor=black,color=black];
+    CommutativeFlatMap -> FlatMap [color=black];
+    CommutativeFlatMap -> CommutativeApply [color=black];
+    CommutativeMonad [fontcolor=black,color=black];
+    CommutativeMonad -> Monad [color=black];
+    CommutativeMonad -> CommutativeFlatMap [color=black];
+    CommutativeMonad -> CommutativeApplicative [color=black];
+}
+#+END_SRC
+
+#+CAPTION: 100
+#+RESULTS:
+[[file:images/cats-commute.png]]
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** Divide and Conquer
 
@@ -5008,7 +5130,7 @@ digraph G {
     Apply [fontcolor=lightslategray,color=lightslategray];
     Contravariant [fontcolor=lightslategray,color=lightslategray];
     Functor [fontcolor=lightslategray,color=lightslategray];
-    InvariantFunctor [fontcolor=lightslategray,color=lightslategray];
+    Invariant [fontcolor=lightslategray,color=lightslategray];
     Functor;
     Divide [fontcolor=black,color=black];
     Divisible [fontcolor=black,color=black];
@@ -5029,8 +5151,8 @@ digraph G {
 
     Bind -> Apply [color=lightslategray];
 
-    Contravariant -> InvariantFunctor [color=lightslategray];
-    Functor -> InvariantFunctor [color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    Functor -> Invariant [color=lightslategray];
 
     Divide -> Contravariant [color=black];
     Divisible -> Divide [color=black];
@@ -5145,7 +5267,7 @@ digraph G {
     Apply [fontcolor=lightslategray,color=lightslategray];
     Contravariant [fontcolor=lightslategray,color=lightslategray];
     Functor [fontcolor=lightslategray,color=lightslategray];
-    InvariantFunctor [fontcolor=lightslategray,color=lightslategray];
+    Invariant [fontcolor=lightslategray,color=lightslategray];
     Functor;
     Divide [fontcolor=lightslategray,color=lightslategray];
     Divisible [fontcolor=lightslategray,color=lightslategray];
@@ -5166,8 +5288,8 @@ digraph G {
 
     Bind -> Apply [color=lightslategray];
 
-    Contravariant -> InvariantFunctor [color=lightslategray];
-    Functor -> InvariantFunctor [color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    Functor -> Invariant [color=lightslategray];
 
     Divide -> Contravariant [color=lightslategray];
     Divisible -> Divide [color=lightslategray];
@@ -5491,7 +5613,7 @@ digraph G {
     Apply [fontcolor=lightslategray,color=lightslategray];
     Contravariant [fontcolor=lightslategray,color=lightslategray];
     Functor [fontcolor=lightslategray,color=lightslategray];
-    InvariantFunctor [fontcolor=lightslategray,color=lightslategray];
+    Invariant [fontcolor=lightslategray,color=lightslategray];
     Functor [fontcolor=lightslategray,color=lightslategray];
     Divide [fontcolor=lightslategray,color=lightslategray];
     Divisible [fontcolor=lightslategray,color=lightslategray];
@@ -5512,8 +5634,8 @@ digraph G {
 
     Bind -> Apply [color=lightslategray];
 
-    Contravariant -> InvariantFunctor [color=lightslategray];
-    Functor -> InvariantFunctor [color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    Functor -> Invariant [color=lightslategray];
 
     Divide -> Contravariant [color=lightslategray];
     Divisible -> Divide [color=lightslategray];
@@ -12373,7 +12495,7 @@ digraph G {
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    InvariantFunctor;
+    Invariant;
     InvariantApplicative [fontcolor=black,color=black];
     InvariantAlt [fontcolor=black,color=black];
 
@@ -12388,14 +12510,14 @@ digraph G {
     Monad;
     MonadError;
 
-    Contravariant -> InvariantFunctor;
+    Contravariant -> Invariant;
 
     Divisible -> Contravariant;
     Decidable -> Divisible [color=black];
 
-    InvariantApplicative -> InvariantFunctor [color=black];
+    InvariantApplicative -> Invariant [color=black];
 
-    Functor -> InvariantFunctor;
+    Functor -> Invariant;
     Applicative -> Functor;
     Alt -> Applicative [color=black];
 
@@ -12422,11 +12544,11 @@ In Scalaz 7.3, =Applicative= and =Divisible= will inherit from =InvariantApplica
 Before we proceed, here is a quick recap of the core Scalaz typeclasses:
 
 #+BEGIN_SRC scala
-@typeclass trait InvariantFunctor[F[_]] {
+@typeclass trait Invariant[F[_]] {
   def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B]
 }
 
-@typeclass trait Contravariant[F[_]] extends InvariantFunctor[F] {
+@typeclass trait Contravariant[F[_]] extends Invariant[F] {
   def contramap[A, B](fa: F[A])(f: B => A): F[B]
   def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = contramap(fa)(g)
 }
@@ -12438,7 +12560,7 @@ Before we proceed, here is a quick recap of the core Scalaz typeclasses:
   def divide22[...] = ...
 }
 
-@typeclass trait Functor[F[_]] extends InvariantFunctor[F] {
+@typeclass trait Functor[F[_]] extends Invariant[F] {
   def map[A, B](fa: F[A])(f: A => B): F[B]
   def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = map(fa)(f)
 }
@@ -12517,11 +12639,11 @@ object Foo {
 #+END_SRC
 
 If a typeclass has parameters in both covariant and contravariant position, as
-is the case with =Semigroup=, it may provide an =InvariantFunctor=
+is the case with =Semigroup=, it may provide an =Invariant=
 
 #+BEGIN_SRC scala
 object Semigroup {
-  implicit val invariant = new InvariantFunctor[Semigroup] {
+  implicit val invariant = new Invariant[Semigroup] {
     def xmap[A, B](ma: Semigroup[A], f: A => B, g: B => A) = new Semigroup[B] {
       def append(x: B, y: =>B): B = f(ma.append(g(x), g(y)))
     }
@@ -13062,7 +13184,7 @@ Returning to the =scalaz-deriving= typeclasses, the invariant parents of =Alt=
 and =Decidable= are:
 
 #+BEGIN_SRC scala
-@typeclass trait InvariantApplicative[F[_]] extends InvariantFunctor[F] {
+@typeclass trait InvariantApplicative[F[_]] extends Invariant[F] {
   def xproduct0[Z](f: =>Z): F[Z]
   def xproduct1[Z, A1](a1: =>F[A1])(f: A1 => Z, g: Z => A1): F[Z] = ...
   def xproduct2 ...
@@ -13078,7 +13200,7 @@ and =Decidable= are:
 }
 #+END_SRC
 
-supporting typeclasses with an =InvariantFunctor= like =Monoid= and =Semigroup=.
+supporting typeclasses with an =Invariant= like =Monoid= and =Semigroup=.
 
 **** Arbitrary Arity and =@deriving=
 
@@ -16249,7 +16371,7 @@ release.
 
 | Typeclass          | Method          | From            | Given                  | To             |
 |--------------------+-----------------+-----------------+------------------------+----------------|
-| ~InvariantFunctor~ | ~xmap~          | ~F[A]~          | ~A => B, B => A~       | ~F[B]~         |
+| ~Invariant~ | ~xmap~          | ~F[A]~          | ~A => B, B => A~       | ~F[B]~         |
 | ~Contravariant~    | ~contramap~     | ~F[A]~          | ~B => A~               | ~F[B]~         |
 | ~Functor~          | ~map~           | ~F[A]~          | ~A => B~               | ~F[B]~         |
 | ~Apply~            | ~ap~ / ~<*>~    | ~F[A]~          | ~F[A => B]~            | ~F[B]~         |
