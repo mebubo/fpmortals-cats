@@ -5620,18 +5620,16 @@ language with useful semantics and additional type safety.
 
 *** Natural Transformations
 
-FunctionK
-
 A function from one type to another is written as ~A => B~ in Scala, which is
-syntax sugar for a ~Function1[A, B]~. Scalaz provides similar syntax sugar =F ~>
+syntax sugar for a ~Function1[A, B]~. Cats provides similar syntax sugar =F ~>
 G= for functions over type constructors =F[_]= to =G[_]=.
 
 These =F ~> G= are called /natural transformations/ and are /universally
 quantified/ because they don't care about the contents of =F[_]=.
 
 #+BEGIN_SRC scala
-type ~>[-F[_], +G[_]] = NaturalTransformation[F, G]
-trait NaturalTransformation[-F[_], +G[_]] {
+type ~>[F[_], G[_]] = FunctionK[F, G]
+trait FunctionK[F[_], G[_]] {
   def apply[A](fa: F[A]): G[A]
 
   def compose[E[_]](f: E ~> F): E ~> G = ...
@@ -5639,24 +5637,25 @@ trait NaturalTransformation[-F[_], +G[_]] {
 }
 #+END_SRC
 
-An example of a natural transformation is a function that converts an =IList=
+An example of a natural transformation is a function that converts a =Vector=
 into a =List=
 
 #+BEGIN_SRC scala
-scala> val convert = new (IList ~> List) {
-         def apply[A](fa: IList[A]): List[A] = fa.toList
+scala> val convert = new (Vector ~> List) {
+         def apply[A](fa: Vector[A]): List[A] = fa.toList
        }
 
-scala> convert(IList(1, 2, 3))
+scala> convert(Vector(1, 2, 3))
 res: List[Int] = List(1, 2, 3)
 #+END_SRC
 
-Or, more concisely, making use of =kind-projector='s syntax sugar:
+Or, more concisely, making use of =kind-projector='s syntax sugar with either of
+the following:
 
 #+BEGIN_SRC scala
-scala> val convert = λ[IList ~> List](_.toList)
+scala> val convert = λ[Vector ~> List](_.toList)
 
-scala> val convert = Lambda[IList ~> List](_.toList)
+scala> val convert = Lambda[Vector ~> List](_.toList)
 #+END_SRC
 
 However, in day-to-day development, it is far more likely that we will use a
@@ -5667,361 +5666,29 @@ changing all our business logic and tests to use this new =BigMachines=
 interface, we may be able to write a transformation from =Machines ~>
 BigMachines=. We will return to this idea in the chapter on Advanced Monads.
 
-*** =Isomorphism=
-
-Sometimes we have two types that are really the same thing, causing
-compatibility problems because the compiler doesn't know what we know. This
-typically happens when we use third party code that is the same as something we
-already have.
-
-This is when =Isomorphism= can help us out. An isomorphism defines a formal "is
-equivalent to" relationship between two types. There are three variants, to
-account for types of different shapes:
-
-#+BEGIN_SRC scala
-object Isomorphism {
-  trait Iso[Arr[_, _], A, B] {
-    def to: Arr[A, B]
-    def from: Arr[B, A]
-  }
-  type IsoSet[A, B] = Iso[Function1, A, B]
-  type <=>[A, B] = IsoSet[A, B]
-  object IsoSet {
-    def apply[A, B](to: A => B, from: B => A): A <=> B = ...
-  }
-
-  trait Iso2[Arr[_[_], _[_]], F[_], G[_]] {
-    def to: Arr[F, G]
-    def from: Arr[G, F]
-  }
-  type IsoFunctor[F[_], G[_]] = Iso2[NaturalTransformation, F, G]
-  type <~>[F[_], G[_]] = IsoFunctor[F, G]
-  object IsoFunctor {
-    def apply[F[_], G[_]](to: F ~> G, from: G ~> F): F <~> G = ...
-  }
-
-  trait Iso3[Arr[_[_, _], _[_, _]], F[_, _], G[_, _]] {
-    def to: Arr[F, G]
-    def from: Arr[G, F]
-  }
-  type IsoBifunctor[F[_, _], G[_, _]] = Iso3[~~>, F, G]
-  type <~~>[F[_, _], G[_, _]] = IsoBifunctor[F, G]
-
-  ...
-}
-#+END_SRC
-
-The type aliases =IsoSet=, =IsoFunctor= and =IsoBifunctor= cover the common
-cases: a regular function, natural transformation and binatural. Convenience
-functions allow us to generate instances from existing functions or natural
-transformations. However, it is often easier to use one of the abstract
-=Template= classes to define an isomorphism. For example:
-
-#+BEGIN_SRC scala
-  val listIListIso: List <~> IList =
-    new IsoFunctorTemplate[List, IList] {
-      def to[A](fa: List[A]) = fromList(fa)
-      def from[A](fa: IList[A]) = fa.toList
-    }
-#+END_SRC
-
-If we introduce an isomorphism, we can generate many of the standard
-typeclasses. For example
-
-#+BEGIN_SRC scala
-trait IsomorphismSemigroup[F, G] extends Semigroup[F] {
-  implicit def G: Semigroup[G]
-  def iso: F <=> G
-  def append(f1: F, f2: =>F): F = iso.from(G.append(iso.to(f1), iso.to(f2)))
-}
-#+END_SRC
-
-allows us to derive a =Semigroup[F]= for a type =F= if we have an ~F <=> G~ and
-a =Semigroup[G]=. Almost all the typeclasses in the hierarchy provide an
-isomorphic variant. If we find ourselves copying and pasting a typeclass
-implementation, it is worth considering if =Isomorphism= is the better solution.
-
-# these should be easier to use!
-# https://github.com/scalaz/scalaz/issues/1662
-
 *** Containers
 
-**** Maybe
+**** Validated
 
-We have already encountered Scalaz's improvement over =scala.Option=, called
-=Maybe=. It is an improvement because it is invariant and does not have any
-unsafe methods like =Option.get=, which can throw an exception.
-
-It is typically used to represent when a thing may be
-present or not without giving any extra context as to why it may be
-missing.
+At first sight, =Validated= appears to be a clone of =Either=:
 
 #+BEGIN_SRC scala
-sealed abstract class Maybe[A] { ... }
-object Maybe {
-  final case class Empty[A]()    extends Maybe[A]
-  final case class Just[A](a: A) extends Maybe[A]
+sealed abstract class Validated[+E, +A] { ... }
+final case class Success[A](a: A) extends Validated[Nothing, A]
+final case class Failure[E](e: E) extends Validated[E, Nothing]
 
-  def empty[A]: Maybe[A] = Empty()
-  def just[A](a: A): Maybe[A] = Just(a)
+type ValidatedNel[E, +X] = Validated[NonEmptyList[E], X]
 
-  def fromOption[A](oa: Option[A]): Maybe[A] = ...
-  def fromNullable[A](a: A): Maybe[A] = if (null == a) empty else just(a)
-  ...
-}
-#+END_SRC
+object Validated {
+  type \?/[+E, +A] = Validated[E, A]
 
-The =.empty= and =.just= companion methods are preferred to creating
-raw =Empty= or =Just= instances because they return a =Maybe=, helping
-with type inference. This pattern is often referred to as returning a
-/sum type/, which is when we have multiple implementations of a
-=sealed trait= but never use a specific subtype in a method signature.
+  def success[E, A]: A => Validated[E, A] = Success(_)
+  def failure[E, A]: E => Validated[E, A] = Failure(_)
+  def failureNel[E, A](e: E): ValidatedNel[E, A] = Failure(NonEmptyList(e))
 
-A convenient =implicit class= allows us to call =.just= on any value
-and receive a =Maybe=
-
-#+BEGIN_SRC scala
-implicit class MaybeOps[A](self: A) {
-  def just: Maybe[A] = Maybe.just(self)
-}
-#+END_SRC
-
-=Maybe= has a typeclass instance for all the things
-
-- =Align=
-- =Traverse=
-- =MonadPlus= / =IsEmpty=
-- =CoflatMap=
-- =Cozip= / =Zip= / =Unzip=
-- =Optional=
-
-and delegate instances depending on =A=
-
-- =Monoid= / =Band=
-- =Equal= / =Order= / =Show=
-
-In addition to the above, =Maybe= has functionality that is not supported by a
-polymorphic typeclass.
-
-#+BEGIN_SRC scala
-sealed abstract class Maybe[A] {
-  def cata[B](f: A => B, b: =>B): B = this match {
-    case Just(a) => f(a)
-    case Empty() => b
-  }
-
-  def |(a: =>A): A = cata(identity, a)
-  def toLeft[B](b: =>B): A \/ B = cata(\/.left, \/-(b))
-  def toRight[B](b: =>B): B \/ A = cata(\/.right, -\/(b))
-  def <\/[B](b: =>B): A \/ B = toLeft(b)
-  def \/>[B](b: =>B): B \/ A = toRight(b)
-
-  def orZero(implicit A: Monoid[A]): A = getOrElse(A.zero)
-  def orEmpty[F[_]: Applicative: PlusEmpty]: F[A] =
-    cata(Applicative[F].point(_), PlusEmpty[F].empty)
-  ...
-}
-#+END_SRC
-
-=.cata= is a terser alternative to =.map(f).getOrElse(b)= and has the
-simpler form =|= if the map is =identity= (i.e. just =.getOrElse=).
-
-=.toLeft= and =.toRight=, and their symbolic aliases, create a disjunction
-(explained in the next section) by taking a fallback for the =Empty= case.
-
-=.orZero= takes a =Monoid= to define the default value.
-
-=.orEmpty= uses an =ApplicativePlus= to create a single element or
-empty container, not forgetting that we already get support for stdlib
-collections from the =Foldable= instance's =.to= method.
-
-#+BEGIN_SRC scala
-scala> 1.just.orZero
-res: Int = 1
-
-scala> Maybe.empty[Int].orZero
-res: Int = 0
-
-scala> Maybe.empty[Int].orEmpty[IList]
-res: IList[Int] = []
-
-scala> 1.just.orEmpty[IList]
-res: IList[Int] = [1]
-
-scala> 1.just.to[List] // from Foldable
-res: List[Int] = List(1)
-#+END_SRC
-
-#+BEGIN_ASIDE
-Methods are defined in OOP style on =Maybe=, contrary to our Chapter 4
-lesson to use an =object= or =implicit class=. This is a common theme
-in Scalaz and the reason is largely historical:
-
-- text editors failed to find extension methods, but this now works
-  seamlessly in IntelliJ, ENSIME and ScalaIDE.
-- there are corner cases where the compiler would fail to infer the
-  types and not be able to find the extension method.
-- the stdlib defines some =implicit class= instances that add methods
-  to all values, with conflicting method names. =+= is the most
-  prominent example, turning everything into a concatenated =String=.
-
-The same is true for functionality that is provided by typeclass
-instances, such as these methods which are otherwise provided by
-=Optional=
-
-#+BEGIN_SRC scala
-sealed abstract class Maybe[A] {
-  def getOrElse(a: =>A): A = ...
-  ...
-}
-#+END_SRC
-
-However, recent versions of Scala have addressed many bugs and we are
-now less likely to encounter problems.
-#+END_ASIDE
-
-**** Either
-
-Scalaz's improvement over =scala.Either= is symbolic, but it is common
-to speak about it as /either/ or =Disjunction=
-
-#+BEGIN_SRC scala
-sealed abstract class \/[+A, +B] { ... }
-final case class -\/[+A](a: A) extends (A \/ Nothing)
-final case class \/-[+B](b: B) extends (Nothing \/ B)
-
-type Disjunction[+A, +B] = \/[A, B]
-
-object \/ {
-  def left [A, B]: A => A \/ B = -\/(_)
-  def right[A, B]: B => A \/ B = \/-(_)
-
-  def fromEither[A, B](e: Either[A, B]): A \/ B = ...
-  ...
-}
-#+END_SRC
-
-with corresponding syntax
-
-#+BEGIN_SRC scala
-implicit class EitherOps[A](val self: A) {
-  final def left [B]: (A \/ B) = -\/(self)
-  final def right[B]: (B \/ A) = \/-(self)
-}
-#+END_SRC
-
-allowing for easy construction of values. Note that the extension
-method takes the type of the /other side/. So if we wish to create a
-=String \/ Int= and we have an =Int=, we must pass =String= when
-calling =.right=
-
-#+BEGIN_SRC scala
-scala> 1.right[String]
-res: String \/ Int = \/-(1)
-
-scala> "hello".left[Int]
-res: String \/ Int = -\/(hello)
-#+END_SRC
-
-The symbolic nature of =\/= makes it read well in type signatures when
-shown infix. Note that symbolic types in Scala associate from the left
-and nested =\/= must have parentheses, e.g. =(A \/ (B \/ (C \/ D))=.
-
-=\/= has right-biased (i.e. =flatMap= applies to =\/-=) typeclass
-instances for:
-
-- =Monad= / =MonadError=
-- =Traverse= / =Bitraverse=
-- =Plus=
-- =Optional=
-- =Cozip=
-
-and depending on the contents
-
-- =Equal= / =Order=
-- =Semigroup= / =Monoid= / =Band=
-
-In addition, there are custom methods
-
-#+BEGIN_SRC scala
-sealed abstract class \/[+A, +B] { self =>
-  def fold[X](l: A => X, r: B => X): X = self match {
-    case -\/(a) => l(a)
-    case \/-(b) => r(b)
-  }
-
-  def swap: (B \/ A) = self match {
-    case -\/(a) => \/-(a)
-    case \/-(b) => -\/(b)
-  }
-
-  def |[BB >: B](x: =>BB): BB = getOrElse(x) // Optional[_]
-  def |||[C, BB >: B](x: =>C \/ BB): C \/ BB = orElse(x) // Optional[_]
-
-  def +++[AA >: A: Semigroup, BB >: B: Semigroup](x: =>AA \/ BB): AA \/ BB = ...
-
-  def toEither: Either[A, B] = ...
-
-  final class SwitchingDisjunction[X](right: =>X) {
-    def <<?:(left: =>X): X = ...
-  }
-  def :?>>[X](right: =>X) = new SwitchingDisjunction[X](right)
-  ...
-}
-#+END_SRC
-
-=.fold= is similar to =Maybe.cata= and requires that both the left and
-right sides are mapped to the same type.
-
-=.swap= swaps a left into a right and a right into a left.
-
-The =|= alias to =getOrElse= appears similarly to =Maybe=. We also get
-=|||= as an alias to =orElse=.
-
-=+++= is for combining disjunctions with lefts taking preference over
-right:
-
-- =right(v1) +++ right(v2)= gives =right(v1 |+| v2)=
-- =right(v1) +++ left (v2)= gives =left (v2)=
-- =left (v1) +++ right(v2)= gives =left (v1)=
-- =left (v1) +++ left (v2)= gives =left (v1 |+| v2)=
-
-=.toEither= is provided for backwards compatibility with the Scala
-stdlib.
-
-The combination of =:?>>= and =<<?:= allow for a convenient syntax to
-ignore the contents of an =\/=, but pick a default based on its type
-
-#+BEGIN_SRC scala
-scala> 1 <<?: foo :?>> 2
-res: Int = 2 // foo is a \/-
-
-scala> 1 <<?: foo.swap :?>> 2
-res: Int = 1
-#+END_SRC
-
-**** Validation
-
-At first sight, =Validation= (aliased with =\?/=, /happy Elvis/)
-appears to be a clone of =Disjunction=:
-
-#+BEGIN_SRC scala
-sealed abstract class Validation[+E, +A] { ... }
-final case class Success[A](a: A) extends Validation[Nothing, A]
-final case class Failure[E](e: E) extends Validation[E, Nothing]
-
-type ValidationNel[E, +X] = Validation[NonEmptyList[E], X]
-
-object Validation {
-  type \?/[+E, +A] = Validation[E, A]
-
-  def success[E, A]: A => Validation[E, A] = Success(_)
-  def failure[E, A]: E => Validation[E, A] = Failure(_)
-  def failureNel[E, A](e: E): ValidationNel[E, A] = Failure(NonEmptyList(e))
-
-  def lift[E, A](a: A)(f: A => Boolean, fail: E): Validation[E, A] = ...
-  def liftNel[E, A](a: A)(f: A => Boolean, fail: E): ValidationNel[E, A] = ...
-  def fromEither[E, A](e: Either[E, A]): Validation[E, A] = ...
+  def lift[E, A](a: A)(f: A => Boolean, fail: E): Validated[E, A] = ...
+  def liftNel[E, A](a: A)(f: A => Boolean, fail: E): ValidatedNel[E, A] = ...
+  def fromEither[E, A](e: Either[E, A]): Validated[E, A] = ...
   ...
 }
 #+END_SRC
@@ -6029,16 +5696,16 @@ object Validation {
 With convenient syntax
 
 #+BEGIN_SRC scala
-implicit class ValidationOps[A](self: A) {
-  def success[X]: Validation[X, A] = Validation.success[X, A](self)
-  def successNel[X]: ValidationNel[X, A] = success
-  def failure[X]: Validation[A, X] = Validation.failure[A, X](self)
-  def failureNel[X]: ValidationNel[A, X] = Validation.failureNel[A, X](self)
+implicit class ValidatedOps[A](self: A) {
+  def success[X]: Validated[X, A] = Validated.success[X, A](self)
+  def successNel[X]: ValidatedNel[X, A] = success
+  def failure[X]: Validated[A, X] = Validated.failure[A, X](self)
+  def failureNel[X]: ValidatedNel[A, X] = Validated.failureNel[A, X](self)
 }
 #+END_SRC
 
 However, the data structure itself is not the complete story.
-=Validation= intentionally does not have an instance of any =Monad=,
+=Validated= intentionally does not have an instance of any =Monad=,
 restricting itself to success-biased versions of:
 
 - =Applicative=
@@ -6053,11 +5720,11 @@ and depending on the contents
 - =Show=
 - =Semigroup= / =Monoid=
 
-The big advantage of restricting to =Applicative= is that =Validation=
+The big advantage of restricting to =Applicative= is that =Validated=
 is explicitly for situations where we wish to report all failures,
 whereas =Disjunction= is used to stop at the first failure. To
-accommodate failure accumulation, a popular form of =Validation= is
-=ValidationNel=, having a =NonEmptyList[E]= in the failure position.
+accommodate failure accumulation, a popular form of =Validated= is
+=ValidatedNel=, having a =NonEmptyList[E]= in the failure position.
 
 Consider performing input validation of data provided by a user using
 =Disjunction= and =flatMap=:
@@ -6098,12 +5765,12 @@ Compare to:
 
 #+BEGIN_SRC scala
 scala> :paste
-       def username(in: String): ValidationNel[String, Username] =
+       def username(in: String): ValidatedNel[String, Username] =
          if (in.isEmpty) "empty username".failureNel
          else if (in.contains(" ")) "username contains spaces".failureNel
          else Username(in).success
 
-       def realname(in: String): ValidationNel[String, Fullname] =
+       def realname(in: String): ValidatedNel[String, Fullname] =
          if (in.isEmpty) "empty real name".failureNel
          else Fullname(in).success
 
@@ -6113,11 +5780,11 @@ res = Failure(NonEmpty[username contains spaces,empty real name])
 
 This time, we get back all the failures!
 
-=Validation= has many of the same methods as =Disjunction=, such as
+=Validated= has many of the same methods as =Disjunction=, such as
 =.fold=, =.swap= and =+++=, plus some extra:
 
 #+BEGIN_SRC scala
-sealed abstract class Validation[+E, +A] {
+sealed abstract class Validated[+E, +A] {
   def append[F >: E: Semigroup, B >: A: Semigroup](x: F \?/ B]): F \?/ B = ...
 
   def disjunction: (E \/ A) = ...
@@ -6139,10 +5806,10 @@ prefers the =success= case
 
 =.disjunction= converts a =Validated[A, B]= into an =A \/ B=.
 Disjunction has the mirror =.validation= and =.validationNel= to
-convert into =Validation=, allowing for easy conversion between
+convert into =Validated=, allowing for easy conversion between
 sequential and parallel failure accumulation.
 
-=\/= and =Validation= are the more performant FP equivalent of a checked
+=\/= and =Validated= are the more performant FP equivalent of a checked
 exception for input validation, avoiding both a stacktrace and requiring the
 caller to deal with the failure resulting in more robust systems.
 
@@ -6150,7 +5817,7 @@ caller to deal with the failure resulting in more robust systems.
 One of the slowest things on the JVM is to create an exception, due to the
 resources required to construct the stacktrace. It is traditional to use
 exceptions for input validation and parsing, which can be thousands of times
-slower than the equivalent functions written with =\/= or =Validation=.
+slower than the equivalent functions written with =\/= or =Validated=.
 
 Some people claim that predictable exceptions for input validation are
 referentially transparent because they will occur every time. However, the
@@ -6204,7 +5871,7 @@ and depending on contents
 - =Show=
 
 =These= (=\&/=) has many of the methods we have come to expect of
-=Disjunction= (=\/=) and =Validation= (=\?/=)
+=Disjunction= (=\/=) and =Validated= (=\?/=)
 
 #+BEGIN_SRC scala
 sealed abstract class \&/[+A, +B] {
