@@ -963,7 +963,7 @@ We will start with some test data
   object Data {
     val node1   = MachineNode("1243d1af-828f-4ba3-9fc0-a19d86852b5a")
     val node2   = MachineNode("550c4943-229e-47b0-b6be-3d686c5f013f")
-    val managed = NonEmptyList(node1, node2)
+    val managed = NonEmptyList.of(node1, node2)
   
     val time1: Epoch = epoch"2017-03-03T18:07:00Z"
     val time2: Epoch = epoch"2017-03-03T18:59:00Z" // +52 mins
@@ -1126,6 +1126,10 @@ Rewriting `initial` to take advantage of this:
       case (db, da, mm, ma, mt) => WorldView(db, da, mm, ma, Map.empty, mt)
     }
 ~~~~~~~~
+
+A> We are cheating somewhat in the way that this has been presented. We will return
+A> later to add one last piece of the puzzle, ensuring that the operations
+A> definitely run in `Parallel`.
 
 
 ### act
@@ -2790,7 +2794,7 @@ chapter later.
 {width=100%}
 ![](images/cats-core-tree.png)
 
-{width=60%}
+{width=80%}
 ![](images/cats-core-cliques.png)
 
 {width=40%}
@@ -2838,7 +2842,7 @@ should not matter, i.e.
   (1 |+| 2) |+| 3 == 1 |+| (2 |+| 3)
 ~~~~~~~~
 
-A `Monoid` is a `Semigroup` with an *empty* element. Combining `zero` with any
+A `Monoid` is a `Semigroup` with an *empty* element. Combining `.empty` with any
 other `a` should give `a`.
 
 {lang="text"}
@@ -2989,7 +2993,7 @@ implemented.
 However, in FP we prefer typeclasses for polymorphic functionality and even the
 concept of equality is captured at compiletime.
 
-{width=20%}
+{width=40%}
 ![](images/cats-objecty.png)
 
 {lang="text"}
@@ -3396,9 +3400,6 @@ There are useful predicate checks
 meets the predicate, and may exit early. `.find` returns the first element
 matching the predicate.
 
-A> We've seen the `NonEmptyList` in previous chapters. For the sake of
-A> brevity we use a type alias `Nel` in place of `NonEmptyList`.
-
 We can make use of `Order` by extracting the minimum or maximum element:
 
 {lang="text"}
@@ -3425,9 +3426,12 @@ or `By` length
 This concludes the key features of `Foldable`. The takeaway is that anything
 we'd expect to find in a collection library is probably on `Foldable`.
 
-There is `.combineAllOption` which is like `.fold` but takes a `Semigroup`
-instead of a `Monoid`, returning an `Option` if the collection is empty (recall
-that `Semigroup` does not have a `empty`):
+
+### Reducible
+
+`Foldable` has a method named `.combineAllOption` which is like `.fold` but
+takes a `Semigroup` instead of a `Monoid`, returning an `Option` if the
+collection is empty (recall that `Semigroup` does not have a `empty`):
 
 {lang="text"}
 ~~~~~~~~
@@ -3442,7 +3446,7 @@ without requiring a `Monoid` on the elements.
 ~~~~~~~~
   @typeclass Reducible[F[_]] extends Foldable[F] {
     def reduceLeft[A](fa: F[A])(f: (A, A) => A): A = ...
-    def reduceRight[A](fa: F[A])(f: (A, Eval[A]) => Eval [A]): Eval[A] = ...
+    def reduceRight[A](fa: F[A])(f: (A, Eval[A]) => Eval[A]): Eval[A] = ...
     def reduce[A: Semigroup](fa: F[A]): A = ...
     def reduceMap[A, B: Semigroup](fa: F[A])(f: A => B): B =
     ...
@@ -3506,6 +3510,30 @@ lists.
 Finally `NonEmptyTraverse`, like `Reducible`, provides variants of these methods
 for data structures that cannot be empty, accepting the weaker `Semigroup`
 instead of a `Monoid`, and an `Apply` instead of an `Applicative`.
+
+
+### Distributive
+
+Very closely related to `Traverse` is `Distributive`, with `.traverse` and
+`.sequence` highlighted to show the subtle difference in the type signatures
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Distributive[F[_]] extends Functor[F] {
+    def distribute[G[_]: Functor, A, B](ga: G[A])(f: A => F[B]): F[G[B]]
+  //def   traverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[B]): G[F[B]]
+  
+    def cosequence[G[_]: Functor, A](ga: G[F[A]]): F[G[A]] = ...
+  //def   sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] = ...
+  }
+~~~~~~~~
+
+The important difference being that `.distribute` and `.cosequence` take
+functions that take another functor `G[_]` and rearrange them so the `F[_]` is
+the outermost context. Contrast to `Traverse` which does the opposite.
+
+`Distribute` is a good fallback if we need to perform a `.traverse` but we don't
+have the `Traverse` or `Applicative` that we need.
 
 
 ## More Functors
@@ -3872,7 +3900,7 @@ parallel functions and then map over their combined output:
     def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
     def map3[A,B,C,D](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
     ...
-    def map21[...]
+    def map22[...]
 ~~~~~~~~
 
 Read `.map2` as a contract promising: "if you give me an `F` of `A` and an `F`
@@ -3938,7 +3966,7 @@ just that:
   def tuple2[A,B](fa: F[A], fb: F[B]): F[(A,B)] = ...
   def tuple3[A,B,C](fa: F[A], fb: F[B], fc: F[C]): F[(A,B,C)] = ...
   ...
-  def tuple21[...]
+  def tuple22[...]
 ~~~~~~~~
 
 {lang="text"}
@@ -4170,5 +4198,438 @@ matter.
 
 {width=100%}
 ![](images/cats-commute.png)
+
+
+## ContravariantMonoidal
+
+{width=100%}
+![](images/cats-contravariantmonoidal.png)
+
+`ContravariantMonoidal` is the `Contravariant` analogue of `Apply`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait ContravariantMonoidal[F[_]] extends ContravariantSemigroupal[F] with InvariantMonoidal[F] {
+    def trivial[A]: F[A] = contramap(unit)(_ => ())
+  
+    def contramap2[A, B, Z](f0: F[A], f1: F[B])(f: Z => (A, B)): F[Z]
+    def contramap3[A, B, C, Z](f0: F[A], f1: F[B], f2: F[C])(f: Z => (A, B, C)): F[Z]
+    ...
+    def contramap22[...] = ...
+  }
+~~~~~~~~
+
+`.contramap2` says that if we can break a `C` into an `A` and a `B`, and
+we're given an `F[A]` and an `F[B]`, then we can get an `F[C]`.
+
+This is a great way to generate contravariant typeclass instances for
+product types by breaking the products into their parts. Cats has an
+instance of `ContravariantMonoidal[Eq]`, let's construct an `Eq` for a new
+product type `Foo`
+
+{lang="text"}
+~~~~~~~~
+  scala> case class Foo(s: String, i: Int)
+  scala> implicit val fooEqual: Eq[Foo] =
+           ContravariantMonoidal.contramap2(Eq[String], Eq[Int]) {
+             (foo: Foo) => (foo.s, foo.i)
+           }
+  scala> Foo("foo", 1) === Foo("bar", 1)
+  res: Boolean = false
+~~~~~~~~
+
+Analagously to `.mapN`, there is a `.contramapN` that makes it even easier to
+use
+
+{lang="text"}
+~~~~~~~~
+  scala> case class Foo(s: String, i: Int)
+  scala> implicit val fooEqual: Eq[Foo] = (Eq[String], Eq[Int]).contramapN {
+           foo : Foo => (foo.s, foo.i)
+         }
+  scala> Foo("foo", 1) === Foo("bar", 1)
+  res: Boolean = false
+~~~~~~~~
+
+Mirroring `Apply`, `ContravariantMonoidal` also has terse syntax for tuples.
+
+{lang="text"}
+~~~~~~~~
+  ...
+    def tuple2[A1, A2](a1: F[A1], a2: F[A2]): F[(A1, A2)] = ...
+    ...
+    def tuple22[...] = ...
+  }
+~~~~~~~~
+
+Generally, if a typeclass author provides an instance of `ContravariantMonoidal`
+or `Apply` it makes it a lot easier for users to derive instances for their
+data.
+
+`.trivial` allows creating implementations where the type parameter is ignored.
+Such values are called *universally quantified*. For example, the
+`ContravariantMonoidal[Eq].trivial[Nil]` returns an implementation of `Eq` for
+an empty list, which is always `true`.
+
+Be careful, because we can create broken instances if we use `.trivial` for
+situations that require non-trivial logic. For example we can accidentally
+create a broken `Eq`
+
+{lang="text"}
+~~~~~~~~
+  scala> case class Foo(s: String, i: Int)
+  scala> implicit val fooEqual: Eq[Foo] = ContravariantMonoidal[Eq].trivial
+  scala> Foo("foo", 1) === Foo("bar", 1)
+  res: Boolean = true // BROKEN!!
+~~~~~~~~
+
+
+## SemigroupK, MonoidK, Alternative
+
+{width=100%}
+![](images/cats-alternative.png)
+
+`SemigroupK` is `Semigroup` but for type constructors, and `MonoidK` is the
+equivalent of `Monoid`. The `K` suffix is for Kind, as in the Higher Kinded
+Types (HKT) language feature described in Chapter 1.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait SemigroupK[F[_]] {
+    @op("<+>") def combineK[A](x: F[A], y: F[A]): F[A]
+  
+    def algebra[A]: Semigroup[F[A]]
+  }
+  @typeclass trait MonoidK[F[_]] extends SemigroupK[F] {
+    def empty[A]: F[A]
+  
+    override def algebra[A]: Monoid[F[A]]
+  }
+~~~~~~~~
+
+The `.algebra` method gives us a regular `Semigroup` or `Monoid` for a concrete
+type parameter `A`.
+
+A> `<+>` is spoken as the "higher kinded combine operator" or "SemigroupK combine
+A> operator".
+
+Although it may look on the surface as if `<+>` behaves like `|+|`
+
+{lang="text"}
+~~~~~~~~
+  scala> List(2,3) |+| List(7)
+  res = List(2, 3, 7)
+  
+  scala> List(2,3) <+> List(7)
+  res = List(2, 3, 7)
+~~~~~~~~
+
+it is best to think of it as operating only at the `F[_]` level, never looking
+into the contents. `SemigroupK` has the convention that it should ignore failures and
+"pick the first winner". `<+>` can therefore be used as a mechanism for early
+exit (losing information) and failure-handling via fallbacks:
+
+{lang="text"}
+~~~~~~~~
+  scala> Option(1) |+| Option(2)
+  res = Some(3)
+  
+  scala> Option(1) <+> Option(2)
+  res = Some(1)
+  
+  scala> Option.empty[Int] <+> Option(1)
+  res = Some(1)
+~~~~~~~~
+
+For example, if we have a `NonEmptyList[Option[Int]]` and we want to ignore
+`None` values (failures) and pick the first winner (`Some`), we can call
+`.reduceK`
+
+{lang="text"}
+~~~~~~~~
+  scala> NonEmptyList.of(None, None, Some(1), Some(2), None).reduceK
+  res: Option[Int] = Some(1)
+~~~~~~~~
+
+where `.reduceK` is defined on `Reducible` along with other higher-kinded
+variants of fold and reduce:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Foldable[F[_]] extends UnorderedFoldable[F] {
+    def foldMapK[G[_]: MonoidK, A, B](fa: F[A])(f: A => G[B]): G[B]
+    def foldK[G[_]: MonoidK, A](fga: F[G[A]]): G[A]
+    ...
+  }
+  
+  @typeclass trait Reducible[F[_]] extends Foldable[F] {
+    def reduceK[G[_]: SemigroupK, A](fga: F[G[A]]): G[A]
+    def reduceMapK[G[_]: SemigroupK, A, B](fa: F[A])(f: A => G[B]): G[B]
+    ...
+  }
+~~~~~~~~
+
+Now that we know about `SemigroupK`, we realise that we could have more easily
+created an instance of `Monoid[TradeTemplate]` the section on Appendable Things.
+Our objective was to "pick the last winner", which is the same as "pick the
+winner" if the arguments are swapped.
+
+Note the use of `<+>` `ccy` and `otc` with arguments swapped, and that we no
+longer need to define `Monoid[Option[Currency]]`, `Monoid[Option[Boolean]]`
+(which was breaking typeclass coherence) or `def lastWins[A]:
+Monoid[Option[A]]`.
+
+{lang="text"}
+~~~~~~~~
+  implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
+    TradeTemplate(Nil, None, None),
+    (a, b) => TradeTemplate(a.payments |+| b.payments,
+                            b.ccy <+> a.ccy,
+                            b.otc <+> a.otc)
+  )
+~~~~~~~~
+
+`Applicative` has a specialised versions of `MonoidK` called `Alternative`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Alternative[F[_]] extends Applicative[F] with MonoidK[F] {
+  
+    def unite[G[_]: Foldable, A](fga: F[G[A]])
+          (implicit F: Monad[F]): F[A]
+    def separate[G[_, _]: Bifoldable, A, B](fgab: F[G[A, B]])
+          (implicit F: Monad[F]): (F[A], F[B])
+  
+    def separateFoldable[G[_, _]: Bifoldable, A, B](fgab: F[G[A, B]])
+          (implicit F: Foldable[F]): (F[A], F[B])
+  
+  }
+~~~~~~~~
+
+`.unite` lets us fold a data structure using the outer container's
+`MonoidK.algebra` rather than the inner content's `Monoid` (if it even has one).
+For `List[Either[String, Int]]` this means `Left[String]` values are converted
+into `.empty`, then everything is concatenated. A convenient way to discard
+errors:
+
+{lang="text"}
+~~~~~~~~
+  scala> List(Right(1), Left("boo"), Right(2)).unite
+  res: List[Int] = List(1, 2)
+~~~~~~~~
+
+`.separate` is very useful if we have a collection of `Either` and we want to
+reorganise them into a collection of `A` and a collection of `B`
+
+{lang="text"}
+~~~~~~~~
+  scala> val list: List[Either[Int, String]] =
+           List(Right("hello"), Left(1), Left(2), Right("world"))
+  
+  scala> list.separate
+  res: (List[Int], List[String]) = (List(1, 2), List(hello, world))
+~~~~~~~~
+
+and `.separateFoldable` can be used when we have a `Foldable` rather than a
+`Monad`. In the cases where we can use both, it is common to use `.separate`.
+
+
+## Co-things
+
+A *co-thing* typically has some opposite type signature to whatever
+*thing* does, but is not necessarily its inverse. To highlight the
+relationship between *thing* and *co-thing*, we will include the type
+signature of *thing* wherever we can.
+
+{width=100%}
+![](images/cats-cothings.png)
+
+
+### CoflatMap
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait CoflatMap[F[_]] extends Functor[F] {
+    def coflatMap[A, B](fa: F[A])(f: F[A] => B): F[B]
+  //def   flatMap[A, B](fa: F[A])(f: A => F[B]): F[B]
+  
+    def coflatten[A](fa: F[A]): F[F[A]]
+  //def   flatten[A](ffa: F[F[A]]): F[A]
+  }
+~~~~~~~~
+
+`.coflatMap` takes an `F[A] => B` that acts on an `F[A]` rather than its
+elements. But this is not necessarily the full `fa`, it can be a substructure
+that has been created by `.coflatten`.
+
+Compelling use-cases for `CoflatMap` are rare, although when shown in the
+`Functor` permutation table (for `F[_]`, `A` and `B`) it is difficult
+to argue why any method should be less important than the others:
+
+| method      | parameter          |
+|----------- |------------------ |
+| `map`       | `A => B`           |
+| `contramap` | `B => A`           |
+| `imap`      | `(A => B, B => A)` |
+| `ap`        | `F[A => B]`        |
+| `flatMap`   | `A => F[B]`        |
+| `coflatMap` | `F[A] => B`        |
+
+
+### Comonad
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Comonad[F[_]] extends CoflatMap[F] {
+    def extract[A](x: F[A]): A
+  //def    pure[A](a: A): F[A]
+  }
+~~~~~~~~
+
+`.extract` unwraps an element from its context. The `Id` type alias that we
+encountered in Chapter 1 has an instance of `Comonad`, so we can reach into an
+`Id` and `.extract` the value it contains. Similarly, `Eval` has a `Comonad`
+with `.extract` effectively being the `Now` strategy.
+
+Another example of a `Comonad` is the `NonEmptyList`, where `.extract` returns
+the `.head` element and `.coflatMap` operates on all the tails of the list.
+
+Effects do not typically have an instance of `Comonad` since it would break
+referential transparency to interpret an `IO[A]` into an `A`.
+
+`Comonad` allows navigation over elements of a data structure and eventually
+returning to one view of that data. Consider a *neighbourhood* (`Hood` for
+short) of a list, containing all the elements to the left of an element
+(`.lefts`), and all the elements to its right (`.rights`).
+
+{lang="text"}
+~~~~~~~~
+  final case class Hood[A](lefts: List[A], focus: A, rights: List[A])
+~~~~~~~~
+
+The `.lefts` and `.rights` should each be ordered with the nearest element to
+the `.focus` at the head, such that we can recover the original `List`
+via `.toList`
+
+{lang="text"}
+~~~~~~~~
+  object Hood {
+    implicit class Ops[A](hood: Hood[A]) {
+      def toList: List[A] = hood.lefts.reverse ::: hood.focus :: hood.rights
+~~~~~~~~
+
+We can write methods that let us move the focus one to the left
+(`.previous`) and one to the right (`.next`)
+
+{lang="text"}
+~~~~~~~~
+  ...
+      def previous: Option[Hood[A]] = hood.lefts match {
+        case Nil => None
+        case head :: tail =>
+          Some(Hood(tail, head, hood.focus :: hood.rights))
+      }
+      def next: Option[Hood[A]] = hood.rights match {
+        case Nil => None
+        case head :: tail =>
+          Some(Hood(hood.focus :: hood.lefts, head, tail))
+      }
+~~~~~~~~
+
+`.more` repeatedly applies an optional function to `Hood` such that we calculate
+*all* the views that `Hood` can take on the list
+
+{lang="text"}
+~~~~~~~~
+  ...
+      def more(f: Hood[A] => Option[Hood[A]]): List[Hood[A]] =
+        f(hood) match {
+          case None => Nil
+          case Some(r) => r :: r.more(f)
+        }
+      def positions: Hood[Hood[A]] = {
+        val left  = hood.more(_.previous)
+        val right = hood.more(_.next)
+        Hood(left, hood, right)
+      }
+    }
+~~~~~~~~
+
+We can now implement `Comonad[Hood]`
+
+{lang="text"}
+~~~~~~~~
+  ...
+    implicit val comonad: Comonad[Hood] = new Comonad[Hood] {
+      def map[A, B](fa: Hood[A])(f: A => B): Hood[B] =
+        Hood(fa.lefts.map(f), f(fa.focus), fa.rights.map(f))
+      def coflatMap[A, B](fa: Hood[A])(f: Hood[A] => B): Hood[B] =
+        fa.positions.map(f)
+      def extract[A](fa: Hood[A]): A = fa.focus
+    }
+  }
+~~~~~~~~
+
+`.coflatten` gives us a `Hood[Hood[List]]` containing all the possible
+neighbourhoods in our initial `List`
+
+{lang="text"}
+~~~~~~~~
+  scala> Hood(List(4, 3, 2, 1), 5, List(6, 7, 8, 9)).coflatten
+  res = Hood(
+          [Hood([3,2,1],4,[5,6,7,8,9]),
+           Hood([2,1],3,[4,5,6,7,8,9]),
+           Hood([1],2,[3,4,5,6,7,8,9]),
+           Hood([],1,[2,3,4,5,6,7,8,9])],
+          Hood([4,3,2,1],5,[6,7,8,9]),
+          [Hood([5,4,3,2,1],6,[7,8,9]),
+           Hood([6,5,4,3,2,1],7,[8,9]),
+           Hood([7,6,5,4,3,2,1],8,[9]),
+           Hood([8,7,6,5,4,3,2,1],9,[])])
+~~~~~~~~
+
+Indeed, `.coflatten` is just `.positions`! We can `override` it with a more
+direct (and performant) implementation
+
+{lang="text"}
+~~~~~~~~
+  override def coflatten[A](fa: Hood[A]): Hood[Hood[A]] = fa.positions
+~~~~~~~~
+
+`Comonad` generalises the concept of `Hood` to arbitrary data structures. `Hood`
+is an example of a *zipper* (unrelated to `Zip`). An application of a zipper is
+for *cellular automata*, which compute the value of each cell in the next
+generation by performing a computation based on the neighbourhood of that cell.
+
+Finally, `Bimonad` exists for structures that have both a `Monad` and a `Comonad`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Bimonad[F[_]] extends Monad[F] with Comonad[F]
+~~~~~~~~
+
+Examples of `Bimonads` are `Id`, `Eval`, pure functions that have no parameters
+(*thunks*), and many non-empty collections.
+
+
+## Summary
+
+That was a lot of material! We have just explored a standard library
+of polymorphic functionality. But to put it into perspective: there
+are more traits in the Scala stdlib Collections API than typeclasses
+in Cats.
+
+It is normal for an FP application to only touch a small percentage of the
+typeclass hierarchy, with most functionality coming from domain-specific
+algebras and typeclasses. Even if the domain-specific typeclasses are just
+specialised clones of something in Cats, it is OK to refactor it later.
+
+To help, we have included a cheat-sheet of the typeclasses and their
+primary methods in the Appendix.
+
+To help further, Valentin Kasas explains how to [combine `N` things](https://twitter.com/ValentinKasas/status/879414703340081156):
+
+{width=70%}
+![](images/shortest-fp-book.png)
 
 

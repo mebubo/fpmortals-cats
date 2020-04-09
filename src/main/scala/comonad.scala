@@ -22,14 +22,14 @@ object Hood {
         Some(Hood(hood.focus :: hood.lefts, head, tail))
     }
 
-    def iterate(f: Hood[A] => Option[Hood[A]]): List[Hood[A]] =
+    def more(f: Hood[A] => Option[Hood[A]]): List[Hood[A]] =
       f(hood) match {
         case None => Nil
-        case Some(r) => r :: r.iterate(f)
+        case Some(r) => r :: r.more(f)
       }
     def positions: Hood[Hood[A]] = {
-      val left  = hood.iterate(_.previous)
-      val right = hood.iterate(_.next)
+      val left  = hood.more(_.previous)
+      val right = hood.more(_.next)
       Hood(left, hood, right)
     }
   }
@@ -39,7 +39,7 @@ object Hood {
       Hood(fa.lefts.map(f), f(fa.focus), fa.rights.map(f))
 
     // uncomment for performance
-    //override def cojoin[A](fa: Hood[A]): Hood[Hood[A]] = fa.positions
+    // override def coflatten[A](fa: Hood[A]): Hood[Hood[A]] = fa.positions
 
     def coflatMap[A, B](fa: Hood[A])(f: Hood[A] => B): Hood[B] =
       fa.positions.map(f)

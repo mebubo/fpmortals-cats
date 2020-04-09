@@ -12,23 +12,29 @@ final case class TradeTemplate(
   otc: Option[Boolean]
 )
 object TradeTemplate {
-  def lastWins[A]: Monoid[Option[A]] = Monoid.instance(
-    None,
-    {
-      case (None, None) => None
-      case (only, None) => only
-      case (None, only) => only
-      case (_, winner)  => winner
-    }
-  )
+  // def lastWins[A]: Monoid[Option[A]] = Monoid.instance(
+  //   None,
+  //   {
+  //     case (None, None) => None
+  //     case (only, None) => only
+  //     case (None, only) => only
+  //     case (_, winner)  => winner
+  //   }
+  // )
 
-  implicit val monoidCcy: Monoid[Option[Currency]] = lastWins
-  implicit val monoidOtc: Monoid[Option[Boolean]] = lastWins
+  // implicit val monoidCcy: Monoid[Option[Currency]] = lastWins
+  // implicit val monoidOtc: Monoid[Option[Boolean]] = lastWins
+
+  // implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
+  //   TradeTemplate(Nil, None, None),
+  //   (a, b) => TradeTemplate(a.payments |+| b.payments, b.ccy |+| a.ccy, b.otc |+| a.otc)
+  // )
 
   implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
     TradeTemplate(Nil, None, None),
-    (a, b) => TradeTemplate(a.payments |+| b.payments, b.ccy |+| a.ccy, b.otc |+| a.otc)
-  )
+    (a, b) => TradeTemplate(a.payments |+| b.payments,
+                            b.ccy <+> a.ccy,
+                            b.otc <+> a.otc))
 
   import java.time.{LocalDate => LD}
   val templates = List(

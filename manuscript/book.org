@@ -1375,7 +1375,7 @@ We will start with some test data
 object Data {
   val node1   = MachineNode("1243d1af-828f-4ba3-9fc0-a19d86852b5a")
   val node2   = MachineNode("550c4943-229e-47b0-b6be-3d686c5f013f")
-  val managed = NonEmptyList(node1, node2)
+  val managed = NonEmptyList.of(node1, node2)
 
   val time1: Epoch = epoch"2017-03-03T18:07:00Z"
   val time2: Epoch = epoch"2017-03-03T18:59:00Z" // +52 mins
@@ -1534,6 +1534,12 @@ def initial: F[WorldView] =
     case (db, da, mm, ma, mt) => WorldView(db, da, mm, ma, Map.empty, mt)
   }
 #+END_SRC
+
+#+BEGIN_ASIDE
+We are cheating somewhat in the way that this has been presented. We will return
+later to add one last piece of the puzzle, ensuring that the operations
+definitely run in =Parallel=.
+#+END_ASIDE
 
 **** act
 
@@ -3116,8 +3122,6 @@ where to look for more information.
 Notably absent are many typeclasses that extend =Monad=. They get their own
 chapter later.
 
-TODO split the =Foldable= subgraph into its own
-
 #+BEGIN_SRC dot :file images/cats-core-tree.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
@@ -3145,20 +3149,6 @@ digraph G {
     Monad -> Applicative;
     Monad -> FlatMap;
 
-    UnorderedFoldable;
-    Foldable;
-    Foldable -> UnorderedFoldable;
-    Reducible;
-    Reducible -> Foldable;
-    UnorderedTraverse;
-    Traverse;
-    Traverse -> Functor;
-    Traverse -> Foldable;
-    Traverse -> UnorderedTraverse;
-    NonEmptyTraverse;
-    NonEmptyTraverse -> Traverse;
-    NonEmptyTraverse -> Reducible;
-
     Contravariant;
     Contravariant -> Invariant;
     ContravariantSemigroupal;
@@ -3173,9 +3163,6 @@ digraph G {
     Comonad;
     Comonad -> CoflatMap;
 
-    Distributive;
-    Distributive -> Functor;
-
     SemigroupK;
     MonoidK;
     MonoidK -> SemigroupK;
@@ -3183,18 +3170,9 @@ digraph G {
     Alternative -> Applicative;
     Alternative -> MonoidK;
 
-    ApplicativeError;
-    ApplicativeError -> Applicative;
-    MonadError;
-    MonadError -> ApplicativeError;
-    MonadError -> Monad;
-
     Bimonad;
     Bimonad -> Monad;
     Bimonad -> Comonad;
-
-    StackSafeMonad;
-    StackSafeMonad -> Monad;
 
     CommutativeApply;
     CommutativeApply -> Apply;
@@ -3242,12 +3220,23 @@ digraph G {
     CommutativeGroup -> Group;
     CommutativeGroup -> CommutativeMonoid;
 
-    Eq;
-    PartialOrder;
-    PartialOrder -> Eq;
-    Order -> PartialOrder;
-    LowerBounded;
-    UpperBounded;
+    Functor [style=dashed];
+    UnorderedFoldable;
+    Foldable;
+    Foldable -> UnorderedFoldable;
+    Reducible;
+    Reducible -> Foldable;
+    UnorderedTraverse;
+    Traverse;
+    Traverse -> Functor [style=dashed];
+    Traverse -> Foldable;
+    Traverse -> UnorderedTraverse;
+    NonEmptyTraverse;
+    NonEmptyTraverse -> Traverse;
+    NonEmptyTraverse -> Reducible;
+
+    Distributive;
+    Distributive -> Functor;
 
     Align;
     FunctorFilter;
@@ -3274,10 +3263,12 @@ digraph G {
     Hash;
     Show;
 
-    NonEmptyParallel;
-    Parallel;
-    Parallel -> NonEmptyParallel;
-
+    Eq;
+    PartialOrder;
+    PartialOrder -> Eq;
+    Order -> PartialOrder;
+    LowerBounded;
+    UpperBounded;
 }
 #+END_SRC
 
@@ -3608,27 +3599,9 @@ digraph G {
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Invariant;
-    InvariantSemigroupal;
-    InvariantSemigroupal -> Invariant;
-    Semigroupal;
-    InvariantSemigroupal -> Semigroupal;
-    InvariantMonoidal;
-    InvariantMonoidal -> InvariantSemigroupal;
-
-    Functor [fontcolor=black,color=black];
-    Functor -> Invariant;
-    Apply;
-    Apply -> InvariantSemigroupal;
-    Apply -> Functor;
-    Applicative;
-    Applicative -> Apply;
-    Applicative -> InvariantMonoidal;
-    FlatMap;
-    FlatMap -> Apply;
-    Monad;
-    Monad -> Applicative;
-    Monad -> FlatMap;
+    Invariant [style=dashed];
+    Functor [style=dashed];
+    Functor -> Invariant [style=dashed];
 
     UnorderedFoldable [fontcolor=black,color=black];
     Foldable [fontcolor=black,color=black];
@@ -3644,55 +3617,8 @@ digraph G {
     NonEmptyTraverse -> Traverse [color=black];
     NonEmptyTraverse -> Reducible [color=black];
 
-    Contravariant;
-    Contravariant -> Invariant;
-    ContravariantSemigroupal;
-    ContravariantSemigroupal -> InvariantSemigroupal;
-    ContravariantSemigroupal -> Contravariant;
-    ContravariantMonoidal;
-    ContravariantMonoidal -> InvariantMonoidal;
-    ContravariantMonoidal -> ContravariantSemigroupal;
-
-    CoflatMap;
-    CoflatMap -> Functor;
-    Comonad;
-    Comonad -> CoflatMap;
-
-    Distributive;
-    Distributive -> Functor;
-
-    SemigroupK;
-    MonoidK;
-    MonoidK -> SemigroupK;
-    Alternative;
-    Alternative -> Applicative;
-    Alternative -> MonoidK;
-
-    ApplicativeError;
-    ApplicativeError -> Applicative;
-    MonadError;
-    MonadError -> ApplicativeError;
-    MonadError -> Monad;
-
-    Bimonad;
-    Bimonad -> Monad;
-    Bimonad -> Comonad;
-
-    StackSafeMonad;
-    StackSafeMonad -> Monad;
-
-    CommutativeApply;
-    CommutativeApply -> Apply;
-    CommutativeApplicative;
-    CommutativeApplicative -> Applicative;
-    CommutativeApplicative -> CommutativeApply;
-    CommutativeFlatMap;
-    CommutativeFlatMap -> FlatMap;
-    CommutativeFlatMap -> CommutativeApply;
-    CommutativeMonad;
-    CommutativeMonad -> Monad;
-    CommutativeMonad -> CommutativeFlatMap;
-    CommutativeMonad -> CommutativeApplicative;
+    Distributive [fontcolor=black,color=black];
+    Distributive -> Functor [color=black];
 
 }
 #+END_SRC
@@ -3986,11 +3912,6 @@ There are useful predicate checks
 meets the predicate, and may exit early. =.find= returns the first element
 matching the predicate.
 
-#+BEGIN_ASIDE
-We've seen the =NonEmptyList= in previous chapters. For the sake of
-brevity we use a type alias =Nel= in place of =NonEmptyList=.
-#+END_ASIDE
-
 We can make use of =Order= by extracting the minimum or maximum element:
 
 #+BEGIN_SRC scala
@@ -4015,9 +3936,11 @@ res: Option[String] = Some(fazz)
 This concludes the key features of =Foldable=. The takeaway is that anything
 we'd expect to find in a collection library is probably on =Foldable=.
 
-There is =.combineAllOption= which is like =.fold= but takes a =Semigroup=
-instead of a =Monoid=, returning an =Option= if the collection is empty (recall
-that =Semigroup= does not have a =empty=):
+**** Reducible
+
+=Foldable= has a method named =.combineAllOption= which is like =.fold= but
+takes a =Semigroup= instead of a =Monoid=, returning an =Option= if the
+collection is empty (recall that =Semigroup= does not have a =empty=):
 
 #+BEGIN_SRC scala
   def combineAllOption[A: Semigroup](fa: F[A]): Option[A] = ...
@@ -4030,7 +3953,7 @@ without requiring a =Monoid= on the elements.
 #+BEGIN_SRC scala
 @typeclass Reducible[F[_]] extends Foldable[F] {
   def reduceLeft[A](fa: F[A])(f: (A, A) => A): A = ...
-  def reduceRight[A](fa: F[A])(f: (A, Eval[A]) => Eval [A]): Eval[A] = ...
+  def reduceRight[A](fa: F[A])(f: (A, Eval[A]) => Eval[A]): Eval[A] = ...
   def reduce[A: Semigroup](fa: F[A]): A = ...
   def reduceMap[A, B: Semigroup](fa: F[A])(f: A => B): B =
   ...
@@ -4091,6 +4014,28 @@ lists.
 Finally =NonEmptyTraverse=, like =Reducible=, provides variants of these methods
 for data structures that cannot be empty, accepting the weaker =Semigroup=
 instead of a =Monoid=, and an =Apply= instead of an =Applicative=.
+
+**** Distributive
+
+Very closely related to =Traverse= is =Distributive=, with =.traverse= and
+=.sequence= highlighted to show the subtle difference in the type signatures
+
+#+BEGIN_SRC scala
+@typeclass trait Distributive[F[_]] extends Functor[F] {
+  def distribute[G[_]: Functor, A, B](ga: G[A])(f: A => F[B]): F[G[B]]
+//def   traverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[B]): G[F[B]]
+
+  def cosequence[G[_]: Functor, A](ga: G[F[A]]): F[G[A]] = ...
+//def   sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] = ...
+}
+#+END_SRC
+
+The important difference being that =.distribute= and =.cosequence= take
+functions that take another functor =G[_]= and rearrange them so the =F[_]= is
+the outermost context. Contrast to =Traverse= which does the opposite.
+
+=Distribute= is a good fallback if we need to perform a =.traverse= but we don't
+have the =Traverse= or =Applicative= that we need.
 
 *** More Functors
 
@@ -4324,20 +4269,6 @@ digraph G {
     Monad -> Applicative;
     Monad -> FlatMap;
 
-    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable -> UnorderedFoldable [color=lightslategray];
-    Reducible [fontcolor=lightslategray,color=lightslategray];
-    Reducible -> Foldable [color=lightslategray];
-    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse -> Functor [color=lightslategray];
-    Traverse -> Foldable [color=lightslategray];
-    Traverse -> UnorderedTraverse [color=lightslategray];
-    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
-    NonEmptyTraverse -> Traverse [color=lightslategray];
-    NonEmptyTraverse -> Reducible [color=lightslategray];
-
     Contravariant [fontcolor=black,color=black];
     Contravariant -> Invariant [color=black];
     ContravariantSemigroupal;
@@ -4352,9 +4283,6 @@ digraph G {
     Comonad;
     Comonad -> CoflatMap;
 
-    Distributive;
-    Distributive -> Functor;
-
     SemigroupK;
     MonoidK;
     MonoidK -> SemigroupK;
@@ -4362,18 +4290,9 @@ digraph G {
     Alternative -> Applicative;
     Alternative -> MonoidK;
 
-    ApplicativeError;
-    ApplicativeError -> Applicative;
-    MonadError;
-    MonadError -> ApplicativeError;
-    MonadError -> Monad;
-
     Bimonad;
     Bimonad -> Monad;
     Bimonad -> Comonad;
-
-    StackSafeMonad;
-    StackSafeMonad -> Monad;
 
     CommutativeApply;
     CommutativeApply -> Apply;
@@ -4505,20 +4424,6 @@ digraph G {
     Monad -> Applicative;
     Monad -> FlatMap;
 
-    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable -> UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
-    Reducible [fontcolor=lightslategray,color=lightslategray];
-    Reducible -> Foldable [color=lightslategray];
-    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse -> Functor [color=lightslategray];
-    Traverse -> Foldable [color=lightslategray];
-    Traverse -> UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
-    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
-    NonEmptyTraverse -> Traverse [color=lightslategray];
-    NonEmptyTraverse -> Reducible [color=lightslategray];
-
     Contravariant [fontcolor=lightslategray,color=lightslategray];
     Contravariant -> Invariant [color=lightslategray];
     ContravariantSemigroupal [fontcolor=black,color=black];
@@ -4533,9 +4438,6 @@ digraph G {
     Comonad;
     Comonad -> CoflatMap;
 
-    Distributive;
-    Distributive -> Functor;
-
     SemigroupK;
     MonoidK;
     MonoidK -> SemigroupK;
@@ -4543,18 +4445,9 @@ digraph G {
     Alternative -> Applicative;
     Alternative -> MonoidK;
 
-    ApplicativeError;
-    ApplicativeError -> Applicative;
-    MonadError;
-    MonadError -> ApplicativeError;
-    MonadError -> Monad;
-
     Bimonad;
     Bimonad -> Monad;
     Bimonad -> Comonad;
-
-    StackSafeMonad;
-    StackSafeMonad -> Monad;
 
     CommutativeApply;
     CommutativeApply -> Apply;
@@ -4644,7 +4537,7 @@ parallel functions and then map over their combined output:
   def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
   def map3[A,B,C,D](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
   ...
-  def map21[...]
+  def map22[...]
 #+END_SRC
 
 Read =.map2= as a contract promising: "if you give me an =F= of =A= and an =F=
@@ -4707,7 +4600,7 @@ just that:
   def tuple2[A,B](fa: F[A], fb: F[B]): F[(A,B)] = ...
   def tuple3[A,B,C](fa: F[A], fb: F[B], fc: F[C]): F[(A,B,C)] = ...
   ...
-  def tuple21[...]
+  def tuple22[...]
 #+END_SRC
 
 #+BEGIN_SRC scala
@@ -4842,20 +4735,6 @@ digraph G {
     Monad -> Applicative [color=black];
     Monad -> FlatMap [color=black];
 
-    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable -> UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
-    Reducible [fontcolor=lightslategray,color=lightslategray];
-    Reducible -> Foldable [color=lightslategray];
-    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse -> Functor [color=lightslategray];
-    Traverse -> Foldable [color=lightslategray];
-    Traverse -> UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
-    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
-    NonEmptyTraverse -> Traverse [color=lightslategray];
-    NonEmptyTraverse -> Reducible [color=lightslategray];
-
     Contravariant [fontcolor=lightslategray,color=lightslategray];
     Contravariant -> Invariant [color=lightslategray];
     ContravariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
@@ -4870,9 +4749,6 @@ digraph G {
     Comonad;
     Comonad -> CoflatMap;
 
-    Distributive;
-    Distributive -> Functor;
-
     SemigroupK;
     MonoidK;
     MonoidK -> SemigroupK;
@@ -4880,18 +4756,9 @@ digraph G {
     Alternative -> Applicative;
     Alternative -> MonoidK;
 
-    ApplicativeError;
-    ApplicativeError -> Applicative;
-    MonadError;
-    MonadError -> ApplicativeError;
-    MonadError -> Monad;
-
     Bimonad;
     Bimonad -> Monad;
     Bimonad -> Comonad;
-
-    StackSafeMonad;
-    StackSafeMonad -> Monad;
 
     CommutativeApply;
     CommutativeApply -> Apply;
@@ -5042,20 +4909,6 @@ digraph G {
     Monad -> Applicative [color=lightslategray];
     Monad -> FlatMap [color=lightslategray];
 
-    UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Foldable -> UnorderedFoldable [fontcolor=lightslategray,color=lightslategray];
-    Reducible [fontcolor=lightslategray,color=lightslategray];
-    Reducible -> Foldable [color=lightslategray];
-    UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse -> Functor [color=lightslategray];
-    Traverse -> Foldable [color=lightslategray];
-    Traverse -> UnorderedTraverse [fontcolor=lightslategray,color=lightslategray];
-    NonEmptyTraverse [fontcolor=lightslategray,color=lightslategray];
-    NonEmptyTraverse -> Traverse [color=lightslategray];
-    NonEmptyTraverse -> Reducible [color=lightslategray];
-
     Contravariant [fontcolor=lightslategray,color=lightslategray];
     Contravariant -> Invariant [color=lightslategray];
     ContravariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
@@ -5070,9 +4923,6 @@ digraph G {
     Comonad;
     Comonad -> CoflatMap;
 
-    Distributive;
-    Distributive -> Functor;
-
     SemigroupK;
     MonoidK;
     MonoidK -> SemigroupK;
@@ -5080,18 +4930,9 @@ digraph G {
     Alternative -> Applicative;
     Alternative -> MonoidK;
 
-    ApplicativeError;
-    ApplicativeError -> Applicative;
-    MonadError;
-    MonadError -> ApplicativeError;
-    MonadError -> Monad;
-
     Bimonad;
     Bimonad -> Monad;
     Bimonad -> Comonad;
-
-    StackSafeMonad;
-    StackSafeMonad -> Monad;
 
     CommutativeApply [fontcolor=black,color=black];
     CommutativeApply -> Apply [color=black];
@@ -5112,117 +4953,125 @@ digraph G {
 #+RESULTS:
 [[file:images/cats-commute.png]]
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
+*** ContravariantMonoidal
 
-*** Divide and Conquer
-
-#+BEGIN_SRC dot :file images/scalaz-divide.png :exports results
+#+BEGIN_SRC dot :file images/cats-contravariantmonoidal.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Cobind;
-    Comonad;
-    Bind [fontcolor=lightslategray,color=lightslategray];
-    Apply [fontcolor=lightslategray,color=lightslategray];
-    Contravariant [fontcolor=lightslategray,color=lightslategray];
-    Functor [fontcolor=lightslategray,color=lightslategray];
     Invariant [fontcolor=lightslategray,color=lightslategray];
-    Functor;
-    Divide [fontcolor=black,color=black];
-    Divisible [fontcolor=black,color=black];
-    Apply;
-    Align [fontcolor=lightslategray,color=lightslategray];
-    Applicative [fontcolor=lightslategray,color=lightslategray];
-    Foldable1 [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse1 [fontcolor=lightslategray,color=lightslategray];
-    Monad [fontcolor=lightslategray,color=lightslategray];
-    "Advanced Monads" [style=dashed];
-    Plus;
-    PlusEmpty;
-    IsEmpty;
-    ApplicativePlus;
-    MonadPlus;
+    InvariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Invariant [color=lightslategray];
+    Semigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Semigroupal [color=lightslategray];
+    InvariantMonoidal [fontcolor=lightslategray,color=lightslategray];
+    InvariantMonoidal -> InvariantSemigroupal [color=lightslategray];
 
-    Bind -> Apply [color=lightslategray];
-
-    Contravariant -> Invariant [color=lightslategray];
+    Functor [fontcolor=lightslategray,color=lightslategray];
     Functor -> Invariant [color=lightslategray];
-
-    Divide -> Contravariant [color=black];
-    Divisible -> Divide [color=black];
+    Apply [fontcolor=lightslategray,color=lightslategray];
+    Apply -> InvariantSemigroupal [color=lightslategray];
     Apply -> Functor [color=lightslategray];
+    Applicative [fontcolor=lightslategray,color=lightslategray];
     Applicative -> Apply [color=lightslategray];
-
-    Foldable1 -> Foldable [color=lightslategray];
-    Traverse -> Functor [color=lightslategray];
-    Traverse -> Foldable [color=lightslategray];
-    Traverse1 -> Traverse [color=lightslategray];
-    Traverse1 -> Foldable1 [color=lightslategray];
-
+    Applicative -> InvariantMonoidal [color=lightslategray];
+    FlatMap [fontcolor=lightslategray,color=lightslategray];
+    FlatMap -> Apply [color=lightslategray];
+    Monad [fontcolor=lightslategray,color=lightslategray];
     Monad -> Applicative [color=lightslategray];
-    "Advanced Monads" -> Monad;
-    Monad -> Bind [color=lightslategray];
+    Monad -> FlatMap [color=lightslategray];
 
-    Cobind -> Functor;
-    Comonad -> Cobind;
+    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    ContravariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    ContravariantSemigroupal -> InvariantSemigroupal [color=lightslategray];
+    ContravariantSemigroupal -> Contravariant [color=lightslategray];
+    ContravariantMonoidal [fontcolor=black,color=black];
+    ContravariantMonoidal -> InvariantMonoidal [color=black];
+    ContravariantMonoidal -> ContravariantSemigroupal [color=black];
 
-    PlusEmpty -> Plus;
-    IsEmpty -> PlusEmpty;
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
 
-    ApplicativePlus -> Applicative;
-    ApplicativePlus -> PlusEmpty;
-    MonadPlus -> ApplicativePlus;
-    MonadPlus -> Monad;
+    SemigroupK;
+    MonoidK;
+    MonoidK -> SemigroupK;
+    Alternative;
+    Alternative -> Applicative;
+    Alternative -> MonoidK;
 
-    Align -> Functor [color=lightslategray];
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    CommutativeApply [fontcolor=lightslategray,color=lightslategray];
+    CommutativeApply -> Apply [color=lightslategray];
+    CommutativeApplicative [fontcolor=lightslategray,color=lightslategray];
+    CommutativeApplicative -> Applicative [color=lightslategray];
+    CommutativeApplicative -> CommutativeApply [color=lightslategray];
+    CommutativeFlatMap [fontcolor=lightslategray,color=lightslategray];
+    CommutativeFlatMap -> FlatMap [color=lightslategray];
+    CommutativeFlatMap -> CommutativeApply [color=lightslategray];
+    CommutativeMonad [fontcolor=lightslategray,color=lightslategray];
+    CommutativeMonad -> Monad [color=lightslategray];
+    CommutativeMonad -> CommutativeFlatMap [color=lightslategray];
+    CommutativeMonad -> CommutativeApplicative [color=lightslategray];
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-divide.png]]
+[[file:images/cats-contravariantmonoidal.png]]
 
-=Divide= is the =Contravariant= analogue of =Apply=
+=ContravariantMonoidal= is the =Contravariant= analogue of =Apply=
 
 #+BEGIN_SRC scala
-@typeclass trait Divide[F[_]] extends Contravariant[F] {
-  def divide[A, B, C](fa: F[A], fb: F[B])(f: C => (A, B)): F[C] = divide2(fa, fb)(f)
+@typeclass trait ContravariantMonoidal[F[_]] extends ContravariantSemigroupal[F] with InvariantMonoidal[F] {
+  def trivial[A]: F[A] = contramap(unit)(_ => ())
 
-  def divide1[A1, Z](a1: F[A1])(f: Z => A1): F[Z] = ...
-  def divide2[A, B, C](fa: F[A], fb: F[B])(f: C => (A, B)): F[C] = ...
+  def contramap2[A, B, Z](f0: F[A], f1: F[B])(f: Z => (A, B)): F[Z]
+  def contramap3[A, B, C, Z](f0: F[A], f1: F[B], f2: F[C])(f: Z => (A, B, C)): F[Z]
   ...
-  def divide22[...] = ...
+  def contramap22[...] = ...
+}
 #+END_SRC
 
-=divide= says that if we can break a =C= into an =A= and a =B=, and
-we're given an =F[A]= and an =F[B]=, then we can get an =F[C]=. Hence,
-/divide and conquer/.
+=.contramap2= says that if we can break a =C= into an =A= and a =B=, and
+we're given an =F[A]= and an =F[B]=, then we can get an =F[C]=.
 
 This is a great way to generate contravariant typeclass instances for
-product types by breaking the products into their parts. Scalaz has an
-instance of =Divide[Equal]=, let's construct an =Equal= for a new
+product types by breaking the products into their parts. Cats has an
+instance of =ContravariantMonoidal[Eq]=, let's construct an =Eq= for a new
 product type =Foo=
 
 #+BEGIN_SRC scala
 scala> case class Foo(s: String, i: Int)
-scala> implicit val fooEqual: Equal[Foo] =
-         Divide[Equal].divide2(Equal[String], Equal[Int]) {
+scala> implicit val fooEqual: Eq[Foo] =
+         ContravariantMonoidal.contramap2(Eq[String], Eq[Int]) {
            (foo: Foo) => (foo.s, foo.i)
          }
 scala> Foo("foo", 1) === Foo("bar", 1)
 res: Boolean = false
 #+END_SRC
 
-Mirroring =Apply=, =Divide= also has terse syntax for tuples. A softer
-/divide so that we may reign/ approach to world domination:
+Analagously to =.mapN=, there is a =.contramapN= that makes it even easier to
+use
+
+#+BEGIN_SRC scala
+scala> case class Foo(s: String, i: Int)
+scala> implicit val fooEqual: Eq[Foo] = (Eq[String], Eq[Int]).contramapN {
+         foo : Foo => (foo.s, foo.i)
+       }
+scala> Foo("foo", 1) === Foo("bar", 1)
+res: Boolean = false
+#+END_SRC
+
+Mirroring =Apply=, =ContravariantMonoidal= also has terse syntax for tuples.
 
 #+BEGIN_SRC scala
   ...
@@ -5232,120 +5081,124 @@ Mirroring =Apply=, =Divide= also has terse syntax for tuples. A softer
 }
 #+END_SRC
 
-Generally, if encoder typeclasses can provide an instance of =Divide=,
-rather than stopping at =Contravariant=, it makes it possible to
-derive instances for any =case class=. Similarly, decoder typeclasses
-can provide an =Apply= instance. We will explore this in a dedicated
-chapter on Typeclass Derivation.
+Generally, if a typeclass author provides an instance of =ContravariantMonoidal=
+or =Apply= it makes it a lot easier for users to derive instances for their
+data.
 
-=Divisible= is the =Contravariant= analogue of =Applicative= and introduces
-=.conquer=, the equivalent of =.pure=
+=.trivial= allows creating implementations where the type parameter is ignored.
+Such values are called /universally quantified/. For example, the
+=ContravariantMonoidal[Eq].trivial[Nil]= returns an implementation of =Eq= for
+an empty list, which is always =true=.
+
+Be careful, because we can create broken instances if we use =.trivial= for
+situations that require non-trivial logic. For example we can accidentally
+create a broken =Eq=
 
 #+BEGIN_SRC scala
-@typeclass trait Divisible[F[_]] extends Divide[F] {
-  def conquer[A]: F[A]
-}
+scala> case class Foo(s: String, i: Int)
+scala> implicit val fooEqual: Eq[Foo] = ContravariantMonoidal[Eq].trivial
+scala> Foo("foo", 1) === Foo("bar", 1)
+res: Boolean = true // BROKEN!!
 #+END_SRC
 
-=.conquer= allows creating trivial implementations where the type parameter is
-ignored. Such values are called /universally quantified/. For example, the
-=Divisible[Equal].conquer[INil[String]]= returns an implementation of =Equal=
-for an empty list of =String= which is always =true=.
+*** SemigroupK, MonoidK, Alternative
 
-# https://github.com/scalaz/scalaz/issues/1481
-
-*** Plus
-
-#+BEGIN_SRC dot :file images/scalaz-plus.png :exports results
+#+BEGIN_SRC dot :file images/cats-alternative.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Cobind;
-    Comonad;
-    Bind [fontcolor=lightslategray,color=lightslategray];
-    Apply [fontcolor=lightslategray,color=lightslategray];
-    Contravariant [fontcolor=lightslategray,color=lightslategray];
-    Functor [fontcolor=lightslategray,color=lightslategray];
     Invariant [fontcolor=lightslategray,color=lightslategray];
-    Functor;
-    Divide [fontcolor=lightslategray,color=lightslategray];
-    Divisible [fontcolor=lightslategray,color=lightslategray];
-    Apply;
-    Align [fontcolor=lightslategray,color=lightslategray];
-    Applicative [fontcolor=lightslategray,color=lightslategray];
-    Foldable1 [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse1 [fontcolor=lightslategray,color=lightslategray];
-    Monad [fontcolor=lightslategray,color=lightslategray];
-    "Advanced Monads" [style=dashed];
-    Plus [fontcolor=black,color=black];
-    PlusEmpty [fontcolor=black,color=black];
-    IsEmpty [fontcolor=black,color=black];
-    ApplicativePlus [fontcolor=black,color=black];
-    MonadPlus [fontcolor=black,color=black];
+    InvariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Invariant [color=lightslategray];
+    Semigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Semigroupal [color=lightslategray];
+    InvariantMonoidal [fontcolor=lightslategray,color=lightslategray];
+    InvariantMonoidal -> InvariantSemigroupal [color=lightslategray];
 
-    Bind -> Apply [color=lightslategray];
-
-    Contravariant -> Invariant [color=lightslategray];
+    Functor [fontcolor=lightslategray,color=lightslategray];
     Functor -> Invariant [color=lightslategray];
-
-    Divide -> Contravariant [color=lightslategray];
-    Divisible -> Divide [color=lightslategray];
+    Apply [fontcolor=lightslategray,color=lightslategray];
+    Apply -> InvariantSemigroupal [color=lightslategray];
     Apply -> Functor [color=lightslategray];
+    Applicative [fontcolor=lightslategray,color=lightslategray];
     Applicative -> Apply [color=lightslategray];
-
-    Foldable1 -> Foldable [color=lightslategray];
-    Traverse -> Functor [color=lightslategray];
-    Traverse -> Foldable [color=lightslategray];
-    Traverse1 -> Traverse [color=lightslategray];
-    Traverse1 -> Foldable1 [color=lightslategray];
-
+    Applicative -> InvariantMonoidal [color=lightslategray];
+    FlatMap [fontcolor=lightslategray,color=lightslategray];
+    FlatMap -> Apply [color=lightslategray];
+    Monad [fontcolor=lightslategray,color=lightslategray];
     Monad -> Applicative [color=lightslategray];
-    "Advanced Monads" -> Monad;
-    Monad -> Bind [color=lightslategray];
+    Monad -> FlatMap [color=lightslategray];
 
-    Cobind -> Functor;
-    Comonad -> Cobind;
+    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    ContravariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    ContravariantSemigroupal -> InvariantSemigroupal [color=lightslategray];
+    ContravariantSemigroupal -> Contravariant [color=lightslategray];
+    ContravariantMonoidal [fontcolor=lightslategray,color=lightslategray];
+    ContravariantMonoidal -> InvariantMonoidal [color=lightslategray];
+    ContravariantMonoidal -> ContravariantSemigroupal [color=lightslategray];
 
-    PlusEmpty -> Plus [color=black];
-    IsEmpty -> PlusEmpty [color=black];
+    CoflatMap;
+    CoflatMap -> Functor;
+    Comonad;
+    Comonad -> CoflatMap;
 
-    ApplicativePlus -> Applicative [color=black];
-    ApplicativePlus -> PlusEmpty [color=black];
-    MonadPlus -> ApplicativePlus [color=black];
-    MonadPlus -> Monad [color=black];
+    SemigroupK [fontcolor=black,color=black];
+    MonoidK [fontcolor=black,color=black];
+    MonoidK -> SemigroupK [color=black];
+    Alternative [fontcolor=black,color=black];
+    Alternative -> Applicative [color=black];
+    Alternative -> MonoidK [color=black];
 
-    Align -> Functor [color=lightslategray];
+    Bimonad;
+    Bimonad -> Monad;
+    Bimonad -> Comonad;
+
+    CommutativeApply [fontcolor=lightslategray,color=lightslategray];
+    CommutativeApply -> Apply [color=lightslategray];
+    CommutativeApplicative [fontcolor=lightslategray,color=lightslategray];
+    CommutativeApplicative -> Applicative [color=lightslategray];
+    CommutativeApplicative -> CommutativeApply [color=lightslategray];
+    CommutativeFlatMap [fontcolor=lightslategray,color=lightslategray];
+    CommutativeFlatMap -> FlatMap [color=lightslategray];
+    CommutativeFlatMap -> CommutativeApply [color=lightslategray];
+    CommutativeMonad [fontcolor=lightslategray,color=lightslategray];
+    CommutativeMonad -> Monad [color=lightslategray];
+    CommutativeMonad -> CommutativeFlatMap [color=lightslategray];
+    CommutativeMonad -> CommutativeApplicative [color=lightslategray];
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-plus.png]]
+[[file:images/cats-alternative.png]]
 
-=Plus= is =Semigroup= but for type constructors, and =PlusEmpty= is
-the equivalent of =Monoid= (they even have the same laws) whereas
-=IsEmpty= is novel and allows us to query if an =F[A]= is empty:
+=SemigroupK= is =Semigroup= but for type constructors, and =MonoidK= is the
+equivalent of =Monoid=. The =K= suffix is for Kind, as in the Higher Kinded
+Types (HKT) language feature described in Chapter 1.
 
 #+BEGIN_SRC scala
-@typeclass trait Plus[F[_]] {
-  @op("<+>") def plus[A](a: F[A], b: =>F[A]): F[A]
+@typeclass trait SemigroupK[F[_]] {
+  @op("<+>") def combineK[A](x: F[A], y: F[A]): F[A]
+
+  def algebra[A]: Semigroup[F[A]]
 }
-@typeclass trait PlusEmpty[F[_]] extends Plus[F] {
+@typeclass trait MonoidK[F[_]] extends SemigroupK[F] {
   def empty[A]: F[A]
-}
-@typeclass trait IsEmpty[F[_]] extends PlusEmpty[F] {
-  def isEmpty[A](fa: F[A]): Boolean
+
+  override def algebra[A]: Monoid[F[A]]
 }
 #+END_SRC
 
+The =.algebra= method gives us a regular =Semigroup= or =Monoid= for a concrete
+type parameter =A=.
+
 #+BEGIN_ASIDE
-=<+>= is the TIE Interceptor, and now we're almost out of TIE
-Fighters...
+=<+>= is spoken as the "higher kinded combine operator" or "SemigroupK combine
+operator".
 #+END_ASIDE
 
 Although it may look on the surface as if =<+>= behaves like =|+|=
@@ -5359,7 +5212,7 @@ res = List(2, 3, 7)
 #+END_SRC
 
 it is best to think of it as operating only at the =F[_]= level, never looking
-into the contents. =Plus= has the convention that it should ignore failures and
+into the contents. =SemigroupK= has the convention that it should ignore failures and
 "pick the first winner". =<+>= can therefore be used as a mechanism for early
 exit (losing information) and failure-handling via fallbacks:
 
@@ -5375,225 +5228,91 @@ res = Some(1)
 #+END_SRC
 
 For example, if we have a =NonEmptyList[Option[Int]]= and we want to ignore
-=None= values (failures) and pick the first winner (=Some=), we can call =<+>=
-from =Foldable1.foldRight1=:
+=None= values (failures) and pick the first winner (=Some=), we can call
+=.reduceK=
 
 #+BEGIN_SRC scala
-scala> NonEmptyList(None, None, Some(1), Some(2), None)
-       .foldRight1(_ <+> _)
+scala> NonEmptyList.of(None, None, Some(1), Some(2), None).reduceK
 res: Option[Int] = Some(1)
 #+END_SRC
 
-In fact, now that we know about =Plus=, we realise that we didn't need to break
-typeclass coherence (when we defined a locally scoped =Monoid[Option[A]]=) in
-the section on Appendable Things. Our objective was to "pick the last winner",
-which is the same as "pick the winner" if the arguments are swapped. Note the
-use of the TIE Interceptor for =ccy= and =otc= with arguments swapped.
+where =.reduceK= is defined on =Reducible= along with other higher-kinded
+variants of fold and reduce:
+
+#+BEGIN_SRC scala
+
+@typeclass trait Foldable[F[_]] extends UnorderedFoldable[F] {
+  def foldMapK[G[_]: MonoidK, A, B](fa: F[A])(f: A => G[B]): G[B]
+  def foldK[G[_]: MonoidK, A](fga: F[G[A]]): G[A]
+  ...
+}
+
+@typeclass trait Reducible[F[_]] extends Foldable[F] {
+  def reduceK[G[_]: SemigroupK, A](fga: F[G[A]]): G[A]
+  def reduceMapK[G[_]: SemigroupK, A, B](fa: F[A])(f: A => G[B]): G[B]
+  ...
+}
+#+END_SRC
+
+Now that we know about =SemigroupK=, we realise that we could have more easily
+created an instance of =Monoid[TradeTemplate]= the section on Appendable Things.
+Our objective was to "pick the last winner", which is the same as "pick the
+winner" if the arguments are swapped.
+
+Note the use of =<+>= =ccy= and =otc= with arguments swapped, and that we no
+longer need to define =Monoid[Option[Currency]]=, =Monoid[Option[Boolean]]=
+(which was breaking typeclass coherence) or =def lastWins[A]:
+Monoid[Option[A]]=.
 
 #+BEGIN_SRC scala
 implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
+  TradeTemplate(Nil, None, None),
   (a, b) => TradeTemplate(a.payments |+| b.payments,
                           b.ccy <+> a.ccy,
-                          b.otc <+> a.otc),
-  TradeTemplate(Nil, None, None)
+                          b.otc <+> a.otc)
 )
 #+END_SRC
 
-=Applicative= and =Monad= have specialised versions of =PlusEmpty=
+=Applicative= has a specialised versions of =MonoidK= called =Alternative=
 
 #+BEGIN_SRC scala
-@typeclass trait ApplicativePlus[F[_]] extends Applicative[F] with PlusEmpty[F]
+@typeclass trait Alternative[F[_]] extends Applicative[F] with MonoidK[F] {
 
-@typeclass trait MonadPlus[F[_]] extends Monad[F] with ApplicativePlus[F] {
-  def unite[T[_]: Foldable, A](ts: F[T[A]]): F[A] = ...
+  def unite[G[_]: Foldable, A](fga: F[G[A]])
+        (implicit F: Monad[F]): F[A]
+  def separate[G[_, _]: Bifoldable, A, B](fgab: F[G[A, B]])
+        (implicit F: Monad[F]): (F[A], F[B])
 
-  def withFilter[A](fa: F[A])(f: A => Boolean): F[A] = ...
+  def separateFoldable[G[_, _]: Bifoldable, A, B](fgab: F[G[A, B]])
+        (implicit F: Foldable[F]): (F[A], F[B])
+
 }
 #+END_SRC
 
 =.unite= lets us fold a data structure using the outer container's
-=PlusEmpty[F].monoid= rather than the inner content's =Monoid=. For
-=List[Either[String, Int]]= this means =Left[String]= values are converted into
-=.empty=, then everything is concatenated. A convenient way to discard errors:
+=MonoidK.algebra= rather than the inner content's =Monoid= (if it even has one).
+For =List[Either[String, Int]]= this means =Left[String]= values are converted
+into =.empty=, then everything is concatenated. A convenient way to discard
+errors:
 
 #+BEGIN_SRC scala
 scala> List(Right(1), Left("boo"), Right(2)).unite
 res: List[Int] = List(1, 2)
-
-scala> val boo: Either[String, Int] = Left("boo")
-       boo.foldMap(a => a.pure[List])
-res: List[String] = List()
-
-scala> val n: Either[String, Int] = Right(1)
-       n.foldMap(a => a.pure[List])
-res: List[Int] = List(1)
 #+END_SRC
 
-=withFilter= allows us to make use of =for= comprehension language
-support as discussed in Chapter 2. It is fair to say that the Scala
-language has built-in language support for =MonadPlus=, not just
-=Monad=!
-
-Returning to =Foldable= for a moment, we can reveal some methods that
-we did not discuss earlier
+=.separate= is very useful if we have a collection of =Either= and we want to
+reorganise them into a collection of =A= and a collection of =B=
 
 #+BEGIN_SRC scala
-@typeclass trait Foldable[F[_]] {
-  ...
-  def msuml[G[_]: PlusEmpty, A](fa: F[G[A]]): G[A] = ...
-  def collapse[X[_]: ApplicativePlus, A](x: F[A]): X[A] = ...
-  ...
-}
+scala> val list: List[Either[Int, String]] =
+         List(Right("hello"), Left(1), Left(2), Right("world"))
+
+scala> list.separate
+res: (List[Int], List[String]) = (List(1, 2), List(hello, world))
 #+END_SRC
 
-=msuml= does a =fold= using the =Monoid= from the =PlusEmpty[G]= and
-=collapse= does a =foldRight= using the =PlusEmpty= of the target
-type:
-
-#+BEGIN_SRC scala
-scala> IList(Option(1), Option.empty[Int], Option(2)).fold
-res: Option[Int] = Some(3) // uses Monoid[Option[Int]]
-
-scala> IList(Option(1), Option.empty[Int], Option(2)).msuml
-res: Option[Int] = Some(1) // uses PlusEmpty[Option].monoid
-
-scala> IList(1, 2).collapse[Option]
-res: Option[Int] = Some(1)
-#+END_SRC
-
-*** Lone Wolves
-
-Some of the typeclasses in Scalaz are stand-alone and not part of the
-larger hierarchy.
-
-#+BEGIN_SRC dot :file images/scalaz-loners.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT];
-    node [fontname=Hack];
-
-    Zip;
-    Unzip;
-    Cozip [fontcolor=lightgray,color=lightgray];
-    Show [fontcolor=lightslategray,color=lightslategray];
-    Optional;
-}
-#+END_SRC
-
-#+CAPTION: 80
-#+RESULTS:
-[[file:images/scalaz-loners.png]]
-
-**** Zippy
-
-#+BEGIN_SRC scala
-@typeclass trait Zip[F[_]]  {
-  def zip[A, B](a: =>F[A], b: =>F[B]): F[(A, B)]
-
-  def zipWith[A, B, C](fa: =>F[A], fb: =>F[B])(f: (A, B) => C)
-                      (implicit F: Functor[F]): F[C] = ...
-
-  def ap(implicit F: Functor[F]): Apply[F] = ...
-
-  @op("<*|*>") def apzip[A, B](f: =>F[A] => F[B], a: =>F[A]): F[(A, B)] = ...
-
-}
-#+END_SRC
-
-The core method is =zip= which is a less powerful version of
-=Divide.tuple2=, and if a =Functor[F]= is provided then =zipWith= can
-behave like =Apply.apply2=. Indeed, an =Apply[F]= can be created from
-a =Zip[F]= and a =Functor[F]= by calling =ap=.
-
-~apzip~ takes an ~F[A]~ and a lifted function from ~F[A] => F[B]~,
-producing an ~F[(A, B)]~ similar to ~Functor.fproduct~.
-
-#+BEGIN_ASIDE
-~<*|*>~ is the creepy Jawa operator.
-#+END_ASIDE
-
-#+BEGIN_SRC scala
-@typeclass trait Unzip[F[_]]  {
-  @op("unfzip") def unzip[A, B](a: F[(A, B)]): (F[A], F[B])
-
-  def firsts[A, B](a: F[(A, B)]): F[A] = ...
-  def seconds[A, B](a: F[(A, B)]): F[B] = ...
-
-  def unzip3[A, B, C](x: F[(A, (B, C))]): (F[A], F[B], F[C]) = ...
-  ...
-  def unzip7[A ... H](x: F[(A, (B, ... H))]): ...
-}
-#+END_SRC
-
-The core method is =unzip= with =firsts= and =seconds= allowing for
-selecting either the first or second element of a tuple in the =F=.
-Importantly, =unzip= is the opposite of =zip=.
-
-The methods =unzip3= to =unzip7= are repeated applications of =unzip=
-to save on boilerplate. For example, if handed a bunch of nested
-tuples, the =Unzip[Id]= is a handy way to flatten them:
-
-#+BEGIN_SRC scala
-scala> Unzip[Id].unzip7((1, (2, (3, (4, (5, (6, 7)))))))
-res = (1,2,3,4,5,6,7)
-#+END_SRC
-
-In a nutshell, =Zip= and =Unzip= are less powerful versions of
-=Divide= and =Apply=, providing useful features without requiring the
-=F= to make too many promises.
-
-**** Optional
-
-=Optional= is a generalisation of data structures that can optionally
-contain a value, like =Option= and =Either=.
-
-Recall that =\/= (/disjunction/) is Scalaz's improvement of
-=scala.Either=. We will also see =Maybe=, Scalaz's improvement of
-=scala.Option=
-
-#+BEGIN_SRC scala
-sealed abstract class Maybe[A]
-final case class Empty[A]()    extends Maybe[A]
-final case class Just[A](a: A) extends Maybe[A]
-#+END_SRC
-
-#+BEGIN_SRC scala
-@typeclass trait Optional[F[_]] {
-  def pextract[B, A](fa: F[A]): F[B] \/ A
-
-  def getOrElse[A](fa: F[A])(default: =>A): A = ...
-  def orElse[A](fa: F[A])(alt: =>F[A]): F[A] = ...
-
-  def isDefined[A](fa: F[A]): Boolean = ...
-  def nonEmpty[A](fa: F[A]): Boolean = ...
-  def isEmpty[A](fa: F[A]): Boolean = ...
-
-  def toOption[A](fa: F[A]): Option[A] = ...
-  def toMaybe[A](fa: F[A]): Maybe[A] = ...
-}
-#+END_SRC
-
-These are methods that should be familiar, except perhaps =pextract=,
-which is a way of letting the =F[_]= return some implementation
-specific =F[B]= or the value. For example, =Optional[Option].pextract=
-returns =Option[Nothing] \/ A=, i.e. =None \/ A=.
-
-Scalaz gives a ternary operator to things that have an =Optional=
-
-#+BEGIN_SRC scala
-implicit class OptionalOps[F[_]: Optional, A](fa: F[A]) {
-  def ?[X](some: =>X): Conditional[X] = new Conditional[X](some)
-  final class Conditional[X](some: =>X) {
-    def |(none: =>X): X = if (Optional[F].isDefined(fa)) some else none
-  }
-}
-#+END_SRC
-
-for example
-
-#+BEGIN_SRC scala
-scala> val knock_knock: Option[String] = ...
-       knock_knock ? "who's there?" | "<tumbleweed>"
-#+END_SRC
+and =.separateFoldable= can be used when we have a =Foldable= rather than a
+=Monad=. In the cases where we can use both, it is common to use =.separate=.
 
 *** Co-things
 
@@ -5602,112 +5321,97 @@ A /co-thing/ typically has some opposite type signature to whatever
 relationship between /thing/ and /co-thing/, we will include the type
 signature of /thing/ wherever we can.
 
-#+BEGIN_SRC dot :file images/scalaz-cothings.png :exports results
+#+BEGIN_SRC dot :file images/cats-cothings.png :exports results
 digraph G {
     graph [dpi=300, rankdir=BT];
     node [fontname=Hack];
     node [fontcolor=lightgray,color=lightgray];
     edge [color=lightgray]
 
-    Cobind [fontcolor=black,color=black];
-    Comonad [fontcolor=black,color=black];
-    Bind [fontcolor=lightslategray,color=lightslategray];
-    Apply [fontcolor=lightslategray,color=lightslategray];
-    Contravariant [fontcolor=lightslategray,color=lightslategray];
-    Functor [fontcolor=lightslategray,color=lightslategray];
     Invariant [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Invariant [color=lightslategray];
+    Semigroupal [fontcolor=lightslategray,color=lightslategray];
+    InvariantSemigroupal -> Semigroupal [color=lightslategray];
+    InvariantMonoidal [fontcolor=lightslategray,color=lightslategray];
+    InvariantMonoidal -> InvariantSemigroupal [color=lightslategray];
+
     Functor [fontcolor=lightslategray,color=lightslategray];
-    Divide [fontcolor=lightslategray,color=lightslategray];
-    Divisible [fontcolor=lightslategray,color=lightslategray];
-    Apply [fontcolor=lightslategray,color=lightslategray];
-    Align [fontcolor=lightslategray,color=lightslategray];
-    Applicative [fontcolor=lightslategray,color=lightslategray];
-    Foldable1 [fontcolor=lightslategray,color=lightslategray];
-    Foldable [fontcolor=lightslategray,color=lightslategray];
-    Traverse [fontcolor=lightslategray,color=lightslategray];
-    Traverse1 [fontcolor=lightslategray,color=lightslategray];
-    Monad [fontcolor=lightslategray,color=lightslategray];
-    "Advanced Monads" [style=dashed];
-    Plus [fontcolor=lightslategray,color=lightslategray];
-    PlusEmpty [fontcolor=lightslategray,color=lightslategray];
-    IsEmpty [fontcolor=lightslategray,color=lightslategray];
-    ApplicativePlus [fontcolor=lightslategray,color=lightslategray];
-    MonadPlus [fontcolor=lightslategray,color=lightslategray];
-
-    Bind -> Apply [color=lightslategray];
-
-    Contravariant -> Invariant [color=lightslategray];
     Functor -> Invariant [color=lightslategray];
-
-    Divide -> Contravariant [color=lightslategray];
-    Divisible -> Divide [color=lightslategray];
+    Apply [fontcolor=lightslategray,color=lightslategray];
+    Apply -> InvariantSemigroupal [color=lightslategray];
     Apply -> Functor [color=lightslategray];
+    Applicative [fontcolor=lightslategray,color=lightslategray];
     Applicative -> Apply [color=lightslategray];
-
-    Foldable1 -> Foldable [color=lightslategray];
-    Traverse -> Functor [color=lightslategray];
-    Traverse -> Foldable [color=lightslategray];
-    Traverse1 -> Traverse [color=lightslategray];
-    Traverse1 -> Foldable1 [color=lightslategray];
-
+    Applicative -> InvariantMonoidal [color=lightslategray];
+    FlatMap [fontcolor=lightslategray,color=lightslategray];
+    FlatMap -> Apply [color=lightslategray];
+    Monad [fontcolor=lightslategray,color=lightslategray];
     Monad -> Applicative [color=lightslategray];
-    "Advanced Monads" -> Monad;
-    Monad -> Bind [color=lightslategray];
+    Monad -> FlatMap [color=lightslategray];
 
-    Cobind -> Functor [color=black];
-    Comonad -> Cobind [color=black];
+    Contravariant [fontcolor=lightslategray,color=lightslategray];
+    Contravariant -> Invariant [color=lightslategray];
+    ContravariantSemigroupal [fontcolor=lightslategray,color=lightslategray];
+    ContravariantSemigroupal -> InvariantSemigroupal [color=lightslategray];
+    ContravariantSemigroupal -> Contravariant [color=lightslategray];
+    ContravariantMonoidal [fontcolor=lightslategray,color=lightslategray];
+    ContravariantMonoidal -> InvariantMonoidal [color=lightslategray];
+    ContravariantMonoidal -> ContravariantSemigroupal [color=lightslategray];
 
-    PlusEmpty -> Plus [color=lightslategray];
-    IsEmpty -> PlusEmpty [color=lightslategray];
+    CoflatMap [fontcolor=black,color=black];
+    CoflatMap -> Functor [color=black];
+    Comonad [fontcolor=black,color=black];
+    Comonad -> CoflatMap [color=black];
 
-    ApplicativePlus -> Applicative [color=lightslategray];
-    ApplicativePlus -> PlusEmpty [color=lightslategray];
-    MonadPlus -> ApplicativePlus [color=lightslategray];
-    MonadPlus -> Monad [color=lightslategray];
+    SemigroupK [fontcolor=lightslategray,color=lightslategray];
+    MonoidK [fontcolor=lightslategray,color=lightslategray];
+    MonoidK -> SemigroupK [color=lightslategray];
+    Alternative [fontcolor=lightslategray,color=lightslategray];
+    Alternative -> Applicative [color=lightslategray];
+    Alternative -> MonoidK [color=lightslategray];
 
-    Align -> Functor [color=lightslategray];
+    Bimonad [fontcolor=black,color=black];
+    Bimonad -> Monad [color=black];
+    Bimonad -> Comonad [color=black];
+
+    CommutativeApply [fontcolor=lightslategray,color=lightslategray];
+    CommutativeApply -> Apply [color=lightslategray];
+    CommutativeApplicative [fontcolor=lightslategray,color=lightslategray];
+    CommutativeApplicative -> Applicative [color=lightslategray];
+    CommutativeApplicative -> CommutativeApply [color=lightslategray];
+    CommutativeFlatMap [fontcolor=lightslategray,color=lightslategray];
+    CommutativeFlatMap -> FlatMap [color=lightslategray];
+    CommutativeFlatMap -> CommutativeApply [color=lightslategray];
+    CommutativeMonad [fontcolor=lightslategray,color=lightslategray];
+    CommutativeMonad -> Monad [color=lightslategray];
+    CommutativeMonad -> CommutativeFlatMap [color=lightslategray];
+    CommutativeMonad -> CommutativeApplicative [color=lightslategray];
+
 }
 #+END_SRC
 
 #+CAPTION: 100
 #+RESULTS:
-[[file:images/scalaz-cothings.png]]
+[[file:images/cats-cothings.png]]
 
-#+BEGIN_SRC dot :file images/scalaz-coloners.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT];
-    node [fontname=Hack];
-
-    Zip [fontcolor=lightslategray,color=lightslategray];
-    Unzip [fontcolor=lightslategray,color=lightslategray];
-    Cozip [fontcolor=black,color=black];
-    Show [fontcolor=lightslategray,color=lightslategray];
-    Optional [fontcolor=lightslategray,color=lightslategray];
-}
-#+END_SRC
-
-#+CAPTION: 80
-#+RESULTS:
-[[file:images/scalaz-coloners.png]]
-
-**** Cobind
+**** CoflatMap
 
 #+BEGIN_SRC scala
-@typeclass trait Cobind[F[_]] extends Functor[F] {
-  def cobind[A, B](fa: F[A])(f: F[A] => B): F[B]
-//def   bind[A, B](fa: F[A])(f: A => F[B]): F[B]
+@typeclass trait CoflatMap[F[_]] extends Functor[F] {
+  def coflatMap[A, B](fa: F[A])(f: F[A] => B): F[B]
+//def   flatMap[A, B](fa: F[A])(f: A => F[B]): F[B]
 
-  def cojoin[A](fa: F[A]): F[F[A]] = ...
-//def   join[A](ffa: F[F[A]]): F[A] = ...
+  def coflatten[A](fa: F[A]): F[F[A]]
+//def   flatten[A](ffa: F[F[A]]): F[A]
 }
 #+END_SRC
 
-~cobind~ (also known as ~coflatmap~) takes an ~F[A] => B~ that acts on
-an ~F[A]~ rather than its elements. But this is not necessarily the
-full ~fa~, it is usually some substructure as defined by ~cojoin~
-(also known as ~coflatten~) which expands a data structure.
+~.coflatMap~ takes an ~F[A] => B~ that acts on an ~F[A]~ rather than its
+elements. But this is not necessarily the full ~fa~, it can be a substructure
+that has been created by ~.coflatten~.
 
-Compelling use-cases for =Cobind= are rare, although when shown in the
+Compelling use-cases for =CoflatMap= are rare, although when shown in the
 =Functor= permutation table (for =F[_]=, =A= and =B=) it is difficult
 to argue why any method should be less important than the others:
 
@@ -5715,71 +5419,76 @@ to argue why any method should be less important than the others:
 |-------------+--------------------|
 | ~map~       | ~A => B~           |
 | ~contramap~ | ~B => A~           |
-| ~xmap~      | ~(A => B, B => A)~ |
+| ~imap~      | ~(A => B, B => A)~ |
 | ~ap~        | ~F[A => B]~        |
-| ~bind~      | ~A => F[B]~        |
-| ~cobind~    | ~F[A] => B~        |
+| ~flatMap~   | ~A => F[B]~        |
+| ~coflatMap~ | ~F[A] => B~        |
 
 **** Comonad
 
 #+BEGIN_SRC scala
-@typeclass trait Comonad[F[_]] extends Cobind[F] {
-  def copoint[A](p: F[A]): A
-//def   point[A](a: =>A): F[A]
+@typeclass trait Comonad[F[_]] extends CoflatMap[F] {
+  def extract[A](x: F[A]): A
+//def    pure[A](a: A): F[A]
 }
 #+END_SRC
 
-=.copoint= (also =.copure=) unwraps an element from its context. Effects do not
-typically have an instance of =Comonad= since would break referential
-transparency to interpret an =IO[A]= into an =A=. But for collection-like /data
-structures/, it is a way to construct a view of all elements alongside their
-neighbours.
+=.extract= unwraps an element from its context. The =Id= type alias that we
+encountered in Chapter 1 has an instance of =Comonad=, so we can reach into an
+=Id= and =.extract= the value it contains. Similarly, =Eval= has a =Comonad=
+with =.extract= effectively being the =Now= strategy.
 
-Consider a /neighbourhood/ (=Hood= for short) for a list containing all the
-elements to the left of an element (=lefts=), the element itself (the =focus=),
-and all the elements to its right (=rights=).
+Another example of a =Comonad= is the =NonEmptyList=, where =.extract= returns
+the =.head= element and =.coflatMap= operates on all the tails of the list.
+
+Effects do not typically have an instance of =Comonad= since it would break
+referential transparency to interpret an =IO[A]= into an =A=.
+
+=Comonad= allows navigation over elements of a data structure and eventually
+returning to one view of that data. Consider a /neighbourhood/ (=Hood= for
+short) of a list, containing all the elements to the left of an element
+(=.lefts=), and all the elements to its right (=.rights=).
 
 #+BEGIN_SRC scala
-final case class Hood[A](lefts: IList[A], focus: A, rights: IList[A])
+final case class Hood[A](lefts: List[A], focus: A, rights: List[A])
 #+END_SRC
 
-The =lefts= and =rights= should each be ordered with the nearest to
-the =focus= at the head, such that we can recover the original =IList=
-via =.toIList=
+The =.lefts= and =.rights= should each be ordered with the nearest element to
+the =.focus= at the head, such that we can recover the original =List=
+via =.toList=
 
 #+BEGIN_SRC scala
 object Hood {
   implicit class Ops[A](hood: Hood[A]) {
-    def toIList: IList[A] = hood.lefts.reverse ::: hood.focus :: hood.rights
+    def toList: List[A] = hood.lefts.reverse ::: hood.focus :: hood.rights
 #+END_SRC
 
 We can write methods that let us move the focus one to the left
-(=previous=) and one to the right (=next=)
+(=.previous=) and one to the right (=.next=)
 
 #+BEGIN_SRC scala
 ...
-    def previous: Maybe[Hood[A]] = hood.lefts match {
-      case INil() => Empty()
-      case ICons(head, tail) =>
-        Just(Hood(tail, head, hood.focus :: hood.rights))
+    def previous: Option[Hood[A]] = hood.lefts match {
+      case Nil => None
+      case head :: tail =>
+        Some(Hood(tail, head, hood.focus :: hood.rights))
     }
-    def next: Maybe[Hood[A]] = hood.rights match {
-      case INil() => Empty()
-      case ICons(head, tail) =>
-        Just(Hood(hood.focus :: hood.lefts, head, tail))
+    def next: Option[Hood[A]] = hood.rights match {
+      case Nil => None
+      case head :: tail =>
+        Some(Hood(hood.focus :: hood.lefts, head, tail))
     }
 #+END_SRC
 
-By introducing =more= to repeatedly apply an optional function to
-=Hood= we can calculate /all/ the =positions= that =Hood= can take in
-the list
+=.more= repeatedly applies an optional function to =Hood= such that we calculate
+/all/ the views that =Hood= can take on the list
 
 #+BEGIN_SRC scala
 ...
-    def more(f: Hood[A] => Maybe[Hood[A]]): IList[Hood[A]] =
+    def more(f: Hood[A] => Option[Hood[A]]): List[Hood[A]] =
       f(hood) match {
-        case Empty() => INil()
-        case Just(r) => ICons(r, r.more(f))
+        case None => Nil
+        case Some(r) => r :: r.more(f)
       }
     def positions: Hood[Hood[A]] = {
       val left  = hood.more(_.previous)
@@ -5796,19 +5505,18 @@ We can now implement =Comonad[Hood]=
   implicit val comonad: Comonad[Hood] = new Comonad[Hood] {
     def map[A, B](fa: Hood[A])(f: A => B): Hood[B] =
       Hood(fa.lefts.map(f), f(fa.focus), fa.rights.map(f))
-    def cobind[A, B](fa: Hood[A])(f: Hood[A] => B): Hood[B] =
+    def coflatMap[A, B](fa: Hood[A])(f: Hood[A] => B): Hood[B] =
       fa.positions.map(f)
-    def copoint[A](fa: Hood[A]): A = fa.focus
+    def extract[A](fa: Hood[A]): A = fa.focus
   }
 }
 #+END_SRC
 
-=cojoin= gives us a =Hood[Hood[IList]]= containing all the possible
-neighbourhoods in our initial =IList=
+=.coflatten= gives us a =Hood[Hood[List]]= containing all the possible
+neighbourhoods in our initial =List=
 
 #+BEGIN_SRC scala
-scala> val middle = Hood(IList(4, 3, 2, 1), 5, IList(6, 7, 8, 9))
-scala> middle.cojoin
+scala> Hood(List(4, 3, 2, 1), 5, List(6, 7, 8, 9)).coflatten
 res = Hood(
         [Hood([3,2,1],4,[5,6,7,8,9]),
          Hood([2,1],3,[4,5,6,7,8,9]),
@@ -5821,56 +5529,41 @@ res = Hood(
          Hood([8,7,6,5,4,3,2,1],9,[])])
 #+END_SRC
 
-Indeed, =cojoin= is just =positions=! We can =override= it with a more
+Indeed, =.coflatten= is just =.positions=! We can =override= it with a more
 direct (and performant) implementation
 
 #+BEGIN_SRC scala
-override def cojoin[A](fa: Hood[A]): Hood[Hood[A]] = fa.positions
+override def coflatten[A](fa: Hood[A]): Hood[Hood[A]] = fa.positions
 #+END_SRC
 
-=Comonad= generalises the concept of =Hood= to arbitrary data
-structures. =Hood= is an example of a /zipper/ (unrelated to =Zip=).
-Scalaz comes with a =Zipper= data type for streams (i.e. infinite 1D
-data structures), which we will discuss in the next chapter.
+=Comonad= generalises the concept of =Hood= to arbitrary data structures. =Hood=
+is an example of a /zipper/ (unrelated to =Zip=). An application of a zipper is
+for /cellular automata/, which compute the value of each cell in the next
+generation by performing a computation based on the neighbourhood of that cell.
 
-One application of a zipper is for /cellular automata/, which compute
-the value of each cell in the next generation by performing a
-computation based on the neighbourhood of that cell.
-
-**** Cozip
+Finally, =Bimonad= exists for structures that have both a =Monad= and a =Comonad=
 
 #+BEGIN_SRC scala
-@typeclass trait Cozip[F[_]] {
-  def cozip[A, B](x: F[A \/ B]): F[A] \/ F[B]
-//def   zip[A, B](a: =>F[A], b: =>F[B]): F[(A, B)]
-//def unzip[A, B](a: F[(A, B)]): (F[A], F[B])
-
-  def cozip3[A, B, C](x: F[A \/ (B \/ C)]): F[A] \/ (F[B] \/ F[C]) = ...
-  ...
-  def cozip7[A ... H](x: F[(A \/ (... H))]): F[A] \/ (... F[H]) = ...
-}
+@typeclass trait Bimonad[F[_]] extends Monad[F] with Comonad[F]
 #+END_SRC
 
-Although named =cozip=, it is perhaps more appropriate to talk about
-its symmetry with =unzip=. Whereas =unzip= splits =F[_]= of tuples
-(products) into tuples of =F[_]=, =cozip= splits =F[_]= of
-disjunctions (coproducts) into disjunctions of =F[_]=.
+Examples of =Bimonads= are =Id=, =Eval=, pure functions that have no parameters
+(/thunks/), and many non-empty collections.
 
 *** Summary
 
 That was a lot of material! We have just explored a standard library
 of polymorphic functionality. But to put it into perspective: there
 are more traits in the Scala stdlib Collections API than typeclasses
-in Scalaz.
+in Cats.
 
 It is normal for an FP application to only touch a small percentage of the
 typeclass hierarchy, with most functionality coming from domain-specific
 algebras and typeclasses. Even if the domain-specific typeclasses are just
-specialised clones of something in Scalaz, it is OK to refactor it later.
+specialised clones of something in Cats, it is OK to refactor it later.
 
 To help, we have included a cheat-sheet of the typeclasses and their
-primary methods in the Appendix, inspired by Adam Rosien's [[http://arosien.github.io/scalaz-cheatsheets/typeclasses.pdf][Scalaz
-Cheatsheet]].
+primary methods in the Appendix.
 
 To help further, Valentin Kasas explains how to [[https://twitter.com/ValentinKasas/status/879414703340081156][combine =N= things]]:
 
@@ -5879,7 +5572,7 @@ digraph G {
     graph [dpi=300, rankdir=TB];
 
     things [label="combine N things",shape=oval];
-    type [label="same (or no)\n type parameter",shape=diamond,height=1.2];
+    type [label="different type",shape=diamond,height=1.2];
     parallel [label="parallel",shape=diamond,height=0.7];
     gtzero [label="N > 0", fontname=Hack,shape=diamond,height=0.7];
 
@@ -5888,24 +5581,24 @@ digraph G {
 
     Monoid [fontname=Hack];
     hkt [label="early exit",shape=diamond,height=0.7];
-    PlusEmpty [fontname=Hack];
+    MonoidK [fontname=Hack];
 
     effonce [label="early exit",shape=diamond,height=0.7];
     Semigroup [fontname=Hack];
-    Plus [fontname=Hack]
+    SemigroupK [fontname=Hack]
 
     things -> type;
-    type -> gtzero [label=" yes"];
-    hkt -> PlusEmpty [label=" yes"]
+    type -> gtzero [label=" no"];
+    hkt -> MonoidK [label=" yes"]
     hkt -> Monoid [label=" no"]
 
     gtzero -> hkt [label=" no"]
     gtzero -> effonce [label=" yes"]
 
     effonce -> Semigroup [label=" no"];
-    effonce -> Plus [label=" yes"]
+    effonce -> SemigroupK [label=" yes"]
 
-    type -> parallel [label=" no"];
+    type -> parallel [label=" yes"];
     parallel -> Apply [label=" yes"];
     parallel -> Monad [label=" no"];
 }
@@ -5915,437 +5608,19 @@ digraph G {
 #+RESULTS:
 [[file:images/shortest-fp-book.png]]
 
-** Scalaz Data Types
-
-Who doesn't love a good data structure? The answer is /nobody/, because data
-structures are awesome.
-
-In this chapter we will explore the /collection-like/ data types in Scalaz, as
-well as data types that augment the Scala language with useful semantics and
-additional type safety.
-
-The primary reason we care about having lots of collections at our disposal is
-performance. A vector and a list can do the same things, but their performance
-characteristics are different: a vector has constant lookup cost whereas a list
-must be traversed.
-
-#+BEGIN_WARNING
-Performance estimates - including claims in this chapter - should be taken with
-a pinch of salt. Modern processor design, memory pipelining, and JVM garbage
-collection can invalidate intuitive reasoning based on operation counting.
-
-A hard truth of modern computers is that empirical performance tests, for a
-specific task, can shock and surprise: e.g. lookup in a =List= is often faster
-in practice than in a =Vector=. Use a tool such as [[http://openjdk.java.net/projects/code-tools/jmh/][JMH]] when performance testing.
-#+END_WARNING
-
-All of the collections presented here are /persistent/: if we add or remove an
-element we can still use the old version. Structural sharing is essential to the
-performance of persistent data structures, otherwise the entire collection is
-rebuilt with every operation.
-
-Unlike the Java and Scala collections, there is no hierarchy to the data types
-in Scalaz: these collections are much simpler to understand. Polymorphic
-functionality is provided by optimised instances of the typeclasses we studied
-in the previous chapter. This makes it a lot easier to swap implementations for
-performance reasons, and to provide our own.
-
-*** Type Variance
-
-# https://failex.blogspot.co.uk/2016/09/the-missing-diamond-of-scala-variance.html
-
-Many of Scalaz's data types are /invariant/ in their type parameters.
-For example, =IList[A]= is *not* a subtype of =IList[B]= when =A <:
-B=.
-
-**** Covariance
-
-The problem with /covariant/ type parameters, such as =class
-List[+A]=, is that =List[A]= is a subtype of =List[Any]= and it is
-easy to accidentally lose type information.
-
-#+BEGIN_SRC scala
-scala> List("hello") ++ List(' ') ++ List("world!")
-res: List[Any] = List(hello,  , world!)
-#+END_SRC
-
-Note that the second list is a =List[Char]= and the compiler has
-unhelpfully inferred the /Least Upper Bound/ (LUB) to be =Any=.
-Compare to =IList=, which requires explicit =.widen[Any]= to permit
-the heinous crime:
-
-#+BEGIN_SRC scala
-scala> IList("hello") ++ IList(' ') ++ IList("world!")
-<console>:35: error: type mismatch;
- found   : Char(' ')
- required: String
-
-scala> IList("hello").widen[Any]
-         ++ IList(' ').widen[Any]
-         ++ IList("world!").widen[Any]
-res: IList[Any] = [hello, ,world!]
-#+END_SRC
-
-Similarly, when the compiler infers a type =with Product with
-Serializable= it is a strong indicator that accidental widening has
-occurred due to covariance.
-
-Unfortunately we must be careful when constructing invariant data
-types because LUB calculations are performed on the parameters:
-
-#+BEGIN_SRC scala
-scala> IList("hello", ' ', "world")
-res: IList[Any] = [hello, ,world]
-#+END_SRC
-
-Another similar problem arises from Scala's =Nothing= type, which is a subtype
-of all other types, including =sealed= ADTs, =final= classes, primitives and
-=null=.
-
-There are no values of type =Nothing=: functions that take a =Nothing= as a
-parameter cannot be run and functions that return =Nothing= will never return.
-=Nothing= was introduced as a mechanism to enable covariant type parameters, but
-a consequence is that we can write un-runnable code, by accident. Scalaz says we
-do not need covariant type parameters which means that we are limiting ourselves
-to writing practical code that can be run.
-
-**** Contrarivariance
-
-On the other hand, /contravariant/ type parameters, such as =trait
-Thing[-A]=, can expose devastating [[https://issues.scala-lang.org/browse/SI-2509][bugs in the compiler]]. Consider Paul
-Phillips' (ex-=scalac= team) demonstration of what he calls
-/contrarivariance/:
-
-#+BEGIN_SRC scala
-scala> :paste
-       trait Thing[-A]
-       def f(x: Thing[ Seq[Int]]): Byte   = 1
-       def f(x: Thing[List[Int]]): Short  = 2
-
-scala> f(new Thing[ Seq[Int]] { })
-       f(new Thing[List[Int]] { })
-
-res = 1
-res = 2
-#+END_SRC
-
-As expected, the compiler is finding the most specific argument in
-each call to =f=. However, implicit resolution gives unexpected
-results:
-
-#+BEGIN_SRC scala
-scala> :paste
-       implicit val t1: Thing[ Seq[Int]] =
-         new Thing[ Seq[Int]] { override def toString = "1" }
-       implicit val t2: Thing[List[Int]] =
-         new Thing[List[Int]] { override def toString = "2" }
-
-scala> implicitly[Thing[ Seq[Int]]]
-       implicitly[Thing[List[Int]]]
-
-res = 1
-res = 1
-#+END_SRC
-
-Implicit resolution flips its definition of "most specific" for contravariant
-types, rendering them useless for typeclasses or anything that requires
-polymorphic functionality. The behaviour is fixed in Dotty.
-
-**** Limitations of subtyping
-
-=scala.Option= has a method =.flatten= which will convert
-=Option[Option[B]]= into an =Option[B]=. However, Scala's type system
-is unable to let us write the required type signature. Consider the
-following that appears correct, but has a subtle bug:
-
-#+BEGIN_SRC scala
-sealed abstract class Option[+A] {
-  def flatten[B, A <: Option[B]]: Option[B] = ...
-}
-#+END_SRC
-
-The =A= introduced on =.flatten= is shadowing the =A= introduced on
-the class. It is equivalent to writing
-
-#+BEGIN_SRC scala
-sealed abstract class Option[+A] {
-  def flatten[B, C <: Option[B]]: Option[B] = ...
-}
-#+END_SRC
-
-which is not the constraint we want.
-
-To workaround this limitation, Scala defines infix classes =<:<= and
-~=:=~ along with implicit evidence that always creates a /witness/
-
-#+BEGIN_SRC scala
-sealed abstract class <:<[-From, +To] extends (From => To)
-implicit def conforms[A]: A <:< A = new <:<[A, A] { def apply(x: A): A = x }
-
-sealed abstract class =:=[ From,  To] extends (From => To)
-implicit def tpEquals[A]: A =:= A = new =:=[A, A] { def apply(x: A): A = x }
-#+END_SRC
-
-~=:=~ can be used to require that two type parameters are exactly the
-same and =<:<= is used to describe subtype relationships, letting us
-implement =.flatten= as
-
-#+BEGIN_SRC scala
-sealed abstract class Option[+A] {
-  def flatten[B](implicit ev: A <:< Option[B]): Option[B] = this match {
-    case None        => None
-    case Some(value) => ev(value)
-  }
-}
-final case class Some[+A](value: A) extends Option[A]
-case object None                    extends Option[Nothing]
-#+END_SRC
-
-Scalaz improves on =<:<= and ~=:=~ with /Liskov/ (aliased to =<~<=)
-and /Leibniz/ (~===~).
-
-#+BEGIN_SRC scala
-sealed abstract class Liskov[-A, +B] {
-  def apply(a: A): B = ...
-  def subst[F[-_]](p: F[B]): F[A]
-
-  def andThen[C](that: Liskov[B, C]): Liskov[A, C] = ...
-  def onF[X](fa: X => A): X => B = ...
-  ...
-}
-object Liskov {
-  type <~<[-A, +B] = Liskov[A, B]
-  type >~>[+B, -A] = Liskov[A, B]
-
-  implicit def refl[A]: (A <~< A) = ...
-  implicit def isa[A, B >: A]: A <~< B = ...
-
-  implicit def witness[A, B](lt: A <~< B): A => B = ...
-  ...
-}
-
-// type signatures have been simplified
-sealed abstract class Leibniz[A, B] {
-  def apply(a: A): B = ...
-  def subst[F[_]](p: F[A]): F[B]
-
-  def flip: Leibniz[B, A] = ...
-  def andThen[C](that: Leibniz[B, C]): Leibniz[A, C] = ...
-  def onF[X](fa: X => A): X => B = ...
-  ...
-}
-object Leibniz {
-  type ===[A, B] = Leibniz[A, B]
-
-  implicit def refl[A]: Leibniz[A, A] = ...
-
-  implicit def subst[A, B](a: A)(implicit f: A === B): B = ...
-  implicit def witness[A, B](f: A === B): A => B = ...
-  ...
-}
-#+END_SRC
-
-Other than generally useful methods and implicit conversions, the
-Scalaz =<~<= and ~===~ evidence is more principled than in the stdlib.
-
-#+BEGIN_ASIDE
-Liskov is named after Barbara Liskov of /Liskov substitution
-principle/ fame, the foundation of Object Oriented Programming.
-
-Gottfried Wilhelm Leibniz basically invented /everything/ in the 17th
-century. He believed in a [[https://en.wikipedia.org/wiki/Monad_(philosophy)][God called Monad]]. Eugenio Moggi later reused
-the name for what we know as =scalaz.Monad=. Not a God, just a mere
-mortal.
-#+END_ASIDE
-
-
-*** Memoisation
-
-Scalaz has the capability to memoise functions, formalised by =Memo=,
-which doesn't make any guarantees about evaluation because of the
-diversity of implementations:
-
-#+BEGIN_SRC scala
-sealed abstract class Memo[K, V] {
-  def apply(z: K => V): K => V
-}
-object Memo {
-  def memo[K, V](f: (K => V) => K => V): Memo[K, V]
-
-  def nilMemo[K, V]: Memo[K, V] = memo[K, V](identity)
-
-  def arrayMemo[V >: Null : ClassTag](n: Int): Memo[Int, V] = ...
-  def doubleArrayMemo(n: Int, sentinel: Double = 0.0): Memo[Int, Double] = ...
-
-  def immutableHashMapMemo[K, V]: Memo[K, V] = ...
-  def immutableTreeMapMemo[K: scala.Ordering, V]: Memo[K, V] = ...
-}
-#+END_SRC
-
-=memo= allows us to create custom implementations of =Memo=, =nilMemo=
-doesn't memoise, evaluating the function normally. The remaining
-implementations intercept calls to the function and cache results
-backed by stdlib collection implementations.
-
-To use =Memo= we simply wrap a function with a =Memo= implementation
-and then call the memoised function:
-
-#+BEGIN_SRC scala
-scala> def foo(n: Int): String = {
-         println("running")
-         if (n > 10) "wibble" else "wobble"
-       }
-
-scala> val mem = Memo.arrayMemo[String](100)
-       val mfoo = mem(foo)
-
-scala> mfoo(1)
-running // evaluated
-res: String = wobble
-
-scala> mfoo(1)
-res: String = wobble // memoised
-#+END_SRC
-
-If the function takes more than one parameter, we must =tupled= the
-method, with the memoised version taking a tuple.
-
-#+BEGIN_SRC scala
-scala> def bar(n: Int, m: Int): String = "hello"
-       val mem = Memo.immutableHashMapMemo[(Int, Int), String]
-       val mbar = mem((bar _).tupled)
-
-scala> mbar((1, 2))
-res: String = "hello"
-#+END_SRC
-
-=Memo= is typically treated as a special construct and the usual rule
-about /purity/ is relaxed for implementations. To be pure only
-requires that our implementations of =Memo= are referential
-transparent in the evaluation of ~K => V~. We may use mutable data and
-perform I/O in the implementation of ~Memo~, e.g. with an LRU or
-distributed cache, without having to declare an effect in the type
-signature. Other functional programming languages have automatic
-memoisation managed by their runtime environment and ~Memo~ is our way
-of extending the JVM to have similar support, unfortunately only on an
-opt-in basis.
-
-*** Tagging
-
-In the section introducing =Monoid= we built a =Monoid[TradeTemplate]= and
-realised that Scalaz does not do what we wanted with =Monoid[Option[A]]=. This
-is not an oversight of Scalaz: often we find that a data type can implement a
-fundamental typeclass in multiple valid ways and that the default implementation
-doesn't do what we want, or simply isn't defined.
-
-Basic examples are =Monoid[Boolean]= (conjunction ~&&~ vs disjunction ~||~) and
-=Monoid[Int]= (multiplication vs addition).
-
-To implement =Monoid[TradeTemplate]= we found ourselves either breaking
-typeclass coherency, or using a different typeclass.
-
-=scalaz.Tag= is designed to address the multiple typeclass implementation
-problem without breaking typeclass coherency.
-
-The definition is quite contorted, but the syntax to use it is very clean. This
-is how we trick the compiler into allowing us to define an infix type =A @@ T=
-that is erased to =A= at runtime:
-
-#+BEGIN_SRC scala
-type @@[A, T] = Tag.k.@@[A, T]
-
-object Tag {
-  @inline val k: TagKind = IdTagKind
-  @inline def apply[A, T](a: A): A @@ T = k(a)
-  ...
-
-  final class TagOf[T] private[Tag]() { ... }
-  def of[T]: TagOf[T] = new TagOf[T]
-}
-sealed abstract class TagKind {
-  type @@[A, T]
-  def apply[A, T](a: A): A @@ T
-  ...
-}
-private[scalaz] object IdTagKind extends TagKind {
-  type @@[A, T] = A
-  @inline override def apply[A, T](a: A): A = a
-  ...
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-i.e. we tag things with Princess Leia hair buns ~@@~.
-#+END_ASIDE
-
-Some useful tags are provided in the =Tags= object
-
-#+BEGIN_SRC scala
-object Tags {
-  sealed trait First
-  val First = Tag.of[First]
-
-  sealed trait Last
-  val Last = Tag.of[Last]
-
-  sealed trait Multiplication
-  val Multiplication = Tag.of[Multiplication]
-
-  sealed trait Disjunction
-  val Disjunction = Tag.of[Disjunction]
-
-  sealed trait Conjunction
-  val Conjunction = Tag.of[Conjunction]
-
-  ...
-}
-#+END_SRC
-
-=First= / =Last= are used to select =Monoid= instances that pick the first or
-last non-zero operand. =Multiplication= is for numeric multiplication instead of
-addition. =Disjunction= / =Conjunction= are to select =&&= or =||=,
-respectively.
-
-In our =TradeTemplate=, instead of using =Option[Currency]= we can use
-=Option[Currency] @@ Tags.Last=. Indeed this is so common that we can use the
-built-in alias, =LastOption=
-
-#+BEGIN_SRC scala
-type LastOption[A] = Option[A] @@ Tags.Last
-#+END_SRC
-
-letting us write a much cleaner =Monoid[TradeTemplate]=
-
-#+BEGIN_SRC scala
-final case class TradeTemplate(
-  payments: List[java.time.LocalDate],
-  ccy: LastOption[Currency],
-  otc: LastOption[Boolean]
-)
-object TradeTemplate {
-  implicit val monoid: Monoid[TradeTemplate] = Monoid.instance(
-    (a, b) =>
-      TradeTemplate(a.payments |+| b.payments,
-                    a.ccy |+| b.ccy,
-                    a.otc |+| b.otc),
-      TradeTemplate(Nil, Tag(None), Tag(None))
-  )
-}
-#+END_SRC
-
-To create a raw value of type =LastOption=, we apply =Tag= to an =Option=. Here
-we are calling =Tag(None)=.
-
-In the chapter on typeclass derivation, we will go one step further and
-automatically derive the =monoid=.
-
-It is tempting to use =Tag= to markup data types for some form of validation
-(e.g. =String @@ PersonName=), but this should be avoided because there are no
-checks on the content of the runtime value. =Tag= should only be used for
-typeclass selection purposes. Prefer the =Refined= library, introduced in
-Chapter 4, to constrain values.
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
+
+** Cats Data Types
+
+In this chapter we will explore some Cats data types that augment the Scala
+language with useful semantics and additional type safety.
 
 *** Natural Transformations
+
+FunctionK
 
 A function from one type to another is written as ~A => B~ in Scala, which is
 syntax sugar for a ~Function1[A, B]~. Scalaz provides similar syntax sugar =F ~>
@@ -6516,7 +5791,7 @@ implicit class MaybeOps[A](self: A) {
 - =Align=
 - =Traverse=
 - =MonadPlus= / =IsEmpty=
-- =Cobind=
+- =CoflatMap=
 - =Cozip= / =Zip= / =Unzip=
 - =Optional=
 
@@ -6920,7 +6195,7 @@ implicit class ThesePairOps[A, B](self: (A, B)) {
 - =Monad=
 - =Bitraverse=
 - =Traverse=
-- =Cobind=
+- =CoflatMap=
 
 and depending on contents
 
@@ -7212,7 +6487,7 @@ variation of:
 - =Monoid=
 - =Traverse= / =Foldable=
 - =MonadPlus= / =IsEmpty=
-- =Cobind= / =Comonad=
+- =CoflatMap= / =Comonad=
 - =Zip= / =Unzip=
 - =Align=
 - =Equal= / =Order=
@@ -16373,7 +15648,7 @@ release.
 
 | Typeclass          | Method          | From            | Given                  | To             |
 |--------------------+-----------------+-----------------+------------------------+----------------|
-| ~Invariant~ | ~xmap~          | ~F[A]~          | ~A => B, B => A~       | ~F[B]~         |
+| ~Invariant~        | ~xmap~          | ~F[A]~          | ~A => B, B => A~       | ~F[B]~         |
 | ~Contravariant~    | ~contramap~     | ~F[A]~          | ~B => A~               | ~F[B]~         |
 | ~Functor~          | ~map~           | ~F[A]~          | ~A => B~               | ~F[B]~         |
 | ~Apply~            | ~ap~ / ~<*>~    | ~F[A]~          | ~F[A => B]~            | ~F[B]~         |
@@ -16383,7 +15658,7 @@ release.
 | ~Decidable~        | ~choose2~       | ~F[A], F[B]~    | ~C => (A \/ B)~        | ~F[C]~         |
 | ~Bind~             | ~bind~ / ~>>=~  | ~F[A]~          | ~A => F[B]~            | ~F[B]~         |
 |                    | ~join~          | ~F[F[A]]~       |                        | ~F[A]~         |
-| ~Cobind~           | ~cobind~        | ~F[A]~          | ~F[A] => B~            | ~F[B]~         |
+| ~CoflatMap~        | ~coflatMap~     | ~F[A]~          | ~F[A] => B~            | ~F[B]~         |
 |                    | ~cojoin~        | ~F[A]~          |                        | ~F[F[A]]~      |
 | ~Applicative~      | ~point~         | ~A~             |                        | ~F[A]~         |
 | ~Divisible~        | ~conquer~       |                 |                        | ~F[A]~         |
