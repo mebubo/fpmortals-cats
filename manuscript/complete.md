@@ -4186,7 +4186,7 @@ evidence that these effects are in fact commutative, or an asynchronous
 implementation may choose to sequence the operations to be on the safe side.
 
 The subtleties of how we deal with (re)-ordering of effects, and what
-those effects are, deserves a dedicated chapter on Advanced Monads.
+those effects are, deserves a dedicated chapter on Cats Monads.
 
 
 ### Commutativity
@@ -4631,5 +4631,502 @@ To help further, Valentin Kasas explains how to [combine `N` things](https://twi
 
 {width=70%}
 ![](images/shortest-fp-book.png)
+
+
+# Cats Data Types
+
+In this chapter we will explore some Cats data types that augment the Scala
+language with useful semantics and additional type safety.
+
+
+## Natural Transformations
+
+A function from one type to another is written as `A => B` in Scala, which is
+syntax sugar for a `Function1[A, B]`. Cats provides similar syntax sugar `F ~>
+G` for functions over type constructors `F[_]` to `G[_]`.
+
+These `F ~> G` are called *natural transformations* and are *universally
+quantified* because they don't care about the contents of `F[_]`.
+
+{lang="text"}
+~~~~~~~~
+  type ~>[F[_], G[_]] = FunctionK[F, G]
+  trait FunctionK[F[_], G[_]] {
+    def apply[A](fa: F[A]): G[A]
+  
+    def compose[E[_]](f: E ~> F): E ~> G = ...
+    def andThen[H[_]](f: G ~> H): F ~> H = ...
+  }
+~~~~~~~~
+
+An example of a natural transformation is a function that converts a `Vector`
+into a `List`
+
+{lang="text"}
+~~~~~~~~
+  scala> val convert = new (Vector ~> List) {
+           def apply[A](fa: Vector[A]): List[A] = fa.toList
+         }
+  
+  scala> convert(Vector(1, 2, 3))
+  res: List[Int] = List(1, 2, 3)
+~~~~~~~~
+
+Or, more concisely, making use of `kind-projector`'s syntax sugar with either of
+the following:
+
+{lang="text"}
+~~~~~~~~
+  scala> val convert = λ[Vector ~> List](_.toList)
+  
+  scala> val convert = Lambda[Vector ~> List](_.toList)
+~~~~~~~~
+
+However, in day-to-day development, it is far more likely that we will use a
+natural transformation to map between algebras. For example, in
+`drone-dynamic-agents` we may want to implement our Google Container Engine
+`Machines` algebra with an off-the-shelf algebra, `BigMachines`. Instead of
+changing all our business logic and tests to use this new `BigMachines`
+interface, we may be able to write a transformation from `Machines ~>
+BigMachines`. We will return to this idea in the chapter on Cats Monads.
+
+
+## Containers
+
+
+### Validated
+
+At first sight, `Validated` appears to be a clone of `Either`:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Validated[+E, +A] { ... }
+  final case class Valid[+A](a: A) extends Validated[Nothing, A]
+  final case class Invalid[+E](e: E) extends Validated[E, Nothing]
+  
+  type ValidatedNel[+E, +A] = Validated[NonEmptyList[E], A]
+  
+  object Validated {
+    def valid[E, A](a: A): Validated[E, A] = Valid(a)
+    def invalid[E, A](e: E): Validated[E, A] = Invalid(e)
+    def validNel[E, A](a: A): ValidatedNel[E, A] = Valid(a)
+    def invalidNel[E, A](e: E): ValidatedNel[E, A] = Validated.Invalid(NonEmptyList(e, Nil))
+  
+    def fromEither[E, A](e: Either[E, A]): Validated[E, A] = ...
+    def fromOption[A, B](o: Option[B], ifNone: => A): Validated[A, B] = ...
+    def fromIor[A, B](ior: Ior[A, B]): Validated[A, B] = ...
+    ...
+  }
+~~~~~~~~
+
+With convenient syntax
+
+{lang="text"}
+~~~~~~~~
+  implicit class ValidatedOps[A](self: A) {
+    def valid[B]: Validated[B, A] = ...
+    def validNel[B]: ValidatedNel[B, A] = ...
+    def invalid[B]: Validated[A, B] = ...
+    def invalidNel[B]: ValidatedNel[A, B] = ...
+  }
+~~~~~~~~
+
+However, the data structure itself is not the complete story. `Validated`
+intentionally does not have an instance of any `Monad`, restricting itself to
+success-biased versions of `Applicative`.
+
+The big advantage of restricting to `Applicative` is that `Validated`
+is explicitly for situations where we wish to report all failures,
+whereas `Either` is used to stop at the first failure. To
+accommodate failure accumulation, a popular form of `Validated` is
+`ValidatedNel`, having a `NonEmptyList[E]` in the failure position.
+
+Consider performing input validation of data provided by a user using
+`Either` and `.flatMap`:
+
+{lang="text"}
+~~~~~~~~
+  scala> :paste
+         final case class Credentials(user: Username, name: Fullname)
+         final case class Username(value: String) extends AnyVal
+         final case class Fullname(value: String) extends AnyVal
+  
+         def username(in: String): Either[String, Username] =
+           if (in.isEmpty) Left("empty username")
+           else if (in.contains(" ")) Left("username contains spaces")
+           else Right(Username(in))
+  
+         def realname(in: String): Either[String, Fullname] =
+           if (in.isEmpty) Left("empty real name")
+           else Right(Fullname(in))
+  
+  scala> for {
+           u <- username("zara turtle")
+           r <- realname("")
+         } yield Credentials(u, r)
+  res = Left(username contains spaces)
+~~~~~~~~
+
+If we use `.mapN` syntax
+
+{lang="text"}
+~~~~~~~~
+  scala> (username("zara turtle"), realname("")).mapN (Credentials.apply)
+  res = Left(username contains spaces)
+~~~~~~~~
+
+we still get back the first failure. This is because `Either` is
+a `Monad`, its `.mapX` methods must be consistent with `.flatMap`
+and not assume that any operations can be performed out of order.
+Compare to:
+
+{lang="text"}
+~~~~~~~~
+  scala> :paste
+         def username(in: String): ValidatedNel[String, Username] =
+           if (in.isEmpty) "empty username".invalidNel
+           else if (in.contains(" ")) "username contains spaces".invalidNel
+           else Username(in).valid
+  
+         def realname(in: String): ValidatedNel[String, Fullname] =
+           if (in.isEmpty) "empty real name".invalidNel
+           else Fullname(in).valid
+  
+  scala> (username("zara turtle") |@| realname("")) (Credentials.apply)
+  res = Invalid(NonEmpty[username contains spaces,empty real name])
+~~~~~~~~
+
+This time, we get back all the failures!
+
+`Either` and `Validated` are the more performant FP equivalent of a checked
+exception for input validation, avoiding both a stacktrace and requiring the
+caller to deal with the failure resulting in more robust systems.
+
+A> One of the slowest things on the JVM is to create an exception, due to the
+A> resources required to construct the stacktrace. It is traditional to use
+A> exceptions for input validation and parsing, which can be thousands of times
+A> slower than the equivalent functions written with `Either` or `Validated`.
+A> 
+A> Some people claim that predictable exceptions for input validation are
+A> referentially transparent because they will occur every time. However, the
+A> stacktrace inside the exception depends on the call chain, giving a different
+A> value depending on who calls it, thus breaking referential transparency.
+A> Regardless, throwing an exception is not pure because it means the function is
+A> not *Total*.
+
+
+### Ior
+
+We encountered `Ior`, a data encoding of inclusive logical `OR`,
+when we learnt about `Align`.
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Ior[+A, +B]
+  final case class Left[A](a: A) extends Ior[A, Nothing]
+  final case class Right[B](b: B) extends Ior[Nothing, B]
+  final case class Both[A, B](a: A, b: B) extends Ior[A, B]
+  
+  type IorNel[+B, +A] = Ior[NonEmptyList[B], A]
+  
+  object Ior {
+    def left[A, B](a: A): A Ior B = ...
+    def right[A, B](b: B): A Ior B = ...
+    def both[A, B](a: A, b: B): A Ior B = ...
+    def leftNel[A, B](a: A): IorNel[A, B] = ...
+    def bothNel[A, B](a: A, b: B): IorNel[A, B] = ...
+  }
+~~~~~~~~
+
+`.flatMap` is right-biased (`Both` and `Right`), taking a `Semigroup`
+of the `Left` content to combine rather than break early.
+
+Although it is tempting to use `Ior` in return types, overuse is an
+anti-pattern, because it is more difficult for the caller to consider three
+scenarios (roughly failure, partial failure, and success) than regular failure
+and success.
+
+
+### Higher Kinded Either
+
+The `EitherK` data type wraps `Either` for type constructors:
+
+{lang="text"}
+~~~~~~~~
+  final case class EitherK[F[_], G[_], A](run: Either[F[A], G[A]])
+  object EitherK {
+    def leftc[F[_], G[_], A](x: F[A]): EitherK[F, G, A] = ...
+    def rightc[F[_], G[_], A](x: G[A]): EitherK[F, G, A] = ...
+  }
+~~~~~~~~
+
+Typeclass instances simply delegate to those of the `F[_]` and `G[_]`.
+
+The most popular use case for `Coproduct` is when we want to create an anonymous
+coproduct of multiple ADTs.
+
+
+### Const
+
+`Const`, for *constant*, is a wrapper for a value of type `A`, along with a
+spare type parameter `B`.
+
+{lang="text"}
+~~~~~~~~
+  final case class Const[A, B](getConst: A) {
+    def retag[C]: Const[A, C] = ...
+  }
+~~~~~~~~
+
+`Const` provides an instance of `Applicative[Const[A, ?]]` if there is a
+`Monoid[A]` available:
+
+{lang="text"}
+~~~~~~~~
+  implicit def applicative[A: Monoid]: Applicative[Const[A, ?]] =
+    new Applicative[Const[A, ?]] {
+      def pure[B](b: B): Const[A, B] = Const(Monoid[A].empty)
+      def ap[A, B](f: Const[C, A => B])(fa: Const[C, A]): Const[C, B] =
+        f.retag[B].combine(fa.retag[B])
+      ...
+    }
+~~~~~~~~
+
+The most important thing about this `Applicative` is that it ignores the `B`
+parameters, continuing on without failing and only combining the constant values
+that it encounters.
+
+Going back to our example application `drone-dynamic-agents`, we should first
+refactor our `logic.scala` file to use `Applicative` instead of `Monad`. We
+wrote `logic.scala` before we learnt about `Applicative` and now we know better:
+
+{lang="text"}
+~~~~~~~~
+  final class DynAgentsModule[F[_]: Applicative](D: Drone[F], M: Machines[F])
+    extends DynAgents[F] {
+    ...
+    def act(world: WorldView): F[WorldView] = world match {
+      case NeedsAgent(node) =>
+        M.start(node) as world.copy(pending = Map(node -> world.time))
+  
+      case Stale(nodes) =>
+        nodes.traverse { node =>
+          M.stop(node) as node
+        }.map { stopped =>
+          val updates = stopped.strengthR(world.time).toList.toMap
+          world.copy(pending = world.pending ++ updates)
+        }
+  
+      case _ => world.pure[F]
+    }
+    ...
+  }
+~~~~~~~~
+
+Since our business logic only requires an `Applicative`, we can write mock
+implementations with `F[a]` as `Const[String, a]`. In each case, we return the
+name of the function that is called:
+
+{lang="text"}
+~~~~~~~~
+  object ConstImpl {
+    type F[a] = Const[String, a]
+  
+    private val D = new Drone[F] {
+      def getBacklog: F[Int] = Const("backlog")
+      def getAgents: F[Int]  = Const("agents")
+    }
+  
+    private val M = new Machines[F] {
+      def getAlive: F[Map[MachineNode, Epoch]]     = Const("alive")
+      def getManaged: F[NonEmptyList[MachineNode]] = Const("managed")
+      def getTime: F[Epoch]                        = Const("time")
+      def start(node: MachineNode): F[Unit]        = Const("start")
+      def stop(node: MachineNode): F[Unit]         = Const("stop")
+    }
+  
+    val program = new DynAgentsModule[F](D, M)
+  }
+~~~~~~~~
+
+With this interpretation of our program, we can assert on the methods that are
+called:
+
+{lang="text"}
+~~~~~~~~
+  it should "call the expected methods" in {
+    import ConstImpl._
+  
+    val alive    = Map(node1 -> time1, node2 -> time1)
+    val world    = WorldView(1, 1, managed, alive, Map.empty, time4)
+  
+    program.act(world).getConst shouldBe "stopstop"
+  }
+~~~~~~~~
+
+Alternatively, we could have counted total method calls by using `Const[Int, ?]`
+or an `Map[String, Int]`.
+
+With this test, we've gone beyond traditional *Mock* testing with a `Const` test
+that asserts on *what is called* without having to provide implementations. This
+is useful if our specification demands that we make certain calls for certain
+input, e.g. for accounting purposes. Furthermore, we've achieved this with
+compiletime safety.
+
+Taking this line of thinking a little further, say we want to monitor (in
+production) the nodes that we are stopping in `.act`. We can create
+implementations of `Drone` and `Machines` with `Const`, calling it from our
+wrapped version of `.act`
+
+{lang="text"}
+~~~~~~~~
+  final class Monitored[U[_]: Functor](program: DynAgents[U]) {
+    type F[a] = Const[Set[MachineNode], a]
+    private val D = new Drone[F] {
+      def getBacklog: F[Int] = Const(Set.empty)
+      def getAgents: F[Int]  = Const(Set.empty)
+    }
+    private val M = new Machines[F] {
+      def getAlive: F[Map[MachineNode, Epoch]]     = Const(Set.empty)
+      def getManaged: F[NonEmptyList[MachineNode]] = Const(Set.empty)
+      def getTime: F[Epoch]                        = Const(Set.empty)
+      def start(node: MachineNode): F[Unit]        = Const(Set.empty)
+      def stop(node: MachineNode): F[Unit]         = Const(Set(node))
+    }
+    val monitor = new DynAgentsModule[F](D, M)
+  
+    def act(world: WorldView): U[(WorldView, Set[MachineNode])] = {
+      val stopped = monitor.act(world).getConst
+      program.act(world).strengthR(stopped)
+    }
+  }
+~~~~~~~~
+
+We can do this because `monitor` is *pure* and running it produces no side
+effects.
+
+This runs the program with `ConstImpl`, extracting all the calls to
+`Machines.stop`, then returning it alongside the `WorldView`. We can unit test
+this:
+
+{lang="text"}
+~~~~~~~~
+  it should "monitor stopped nodes" in {
+    val underlying = new Mutable(needsAgents).program
+  
+    val alive = Map(node1 -> time1, node2 -> time1)
+    val world = WorldView(1, 1, managed, alive, Map.empty, time4)
+    val expected = world.copy(pending = Map(node1 -> time4, node2 -> time4))
+  
+    val monitored = new Monitored(underlying)
+    monitored.act(world) shouldBe (expected -> Set(node1, node2))
+  }
+~~~~~~~~
+
+We have used `Const` to do something that looks like *Aspect Oriented
+Programming*, once popular in Java. We built on top of our business logic to
+support a monitoring concern, without having to complicate the business logic.
+
+It gets even better. We can run `ConstImpl` in production to gather what we want
+to `.stop`, and then provide an **optimised** implementation of `act` that can make
+use of implementation-specific batched calls.
+
+The silent hero of this story is `Applicative`. `Const` lets us show off what is
+possible. If we need to change our program to require a `Monad`, we can no
+longer use `Const` and must write full mocks to be able to assert on what is
+called under certain inputs. The *Rule of Least Power* demands that we use
+`Applicative` instead of `Monad` wherever we can.
+
+
+### Chain
+
+`Chain` is a catenable sequence that supports `O(1)` appending, prepending and
+concatenation. It is especially useful if we need to construct a collection by
+concatening existing collections (that may be any `Seq`), adding individual
+elements (by pre-pending or appending) or concatenating existing `Chain` values.
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Chain[+A] {
+    def prepend[A2 >: A](a: A2): Chain[A2] = ...
+    def append[A2 >: A](a: A2): Chain[A2] = ...
+    def concat[A2 >: A](c: Chain[A2]): Chain[A2] = ...
+  
+    def toList: List[A] = ...
+    def toVector: Vector[A] = ...
+  
+    def groupBy[B: Order](f: A => B): SortedMap[B, NonEmptyChain[A]] = ...
+    ...
+  }
+  
+  object Chain {
+    case object Empty extends Chain[Nothing]
+    final case class Singleton[A](a: A) extends Chain[A]
+    final case class Append[A](left: Chain[A], right: Chain[A]) extends Chain[A]
+    final case class Wrap[A](seq: Seq[A]) extends Chain[A]
+  
+    def empty[A]: Chain[A] = ...
+    def one[A](a: A): Chain[A] = ...
+    def fromSeq[A](s: Seq[A]): Chain[A] = ...
+    ...
+  }
+~~~~~~~~
+
+`Chain` has a `Monad` and also has a `NonEmptyChain` variant.
+
+The user of `Chain` is expected to manually *balance* it because two `Chain` may
+contain the same values but be represented different ways, and therefore have
+different performance characteristics. For example, if we construct a `Chain`
+entirely out of `Singleton` by using `.prepend` and `.append` then our `Chain`
+will have more *links* in it but if we use `.concat` and `Chain.fromSeq` where
+possible then we will have less links per datum.
+
+The ability to control the shape of the `Chain` makes it suitable for cases
+where it is useful to encode domain knowledge of a hierarchy into the data
+structure. For example, in artificial intelligence, a `Chain` can be used in
+[clustering algorithms](https://arxiv.org/abs/1203.3468) to organise data into a hierarchy of increasingly similar
+things. It is possible to represent XML documents with a `Chain`.
+
+When working with hierarchical data, consider using a `Chain` instead of rolling
+a custom data structure.
+
+`Chain` is also useful if we wish to build a regular data structure such as
+`Vector` but the performance cost of appending `Vector` at every level is too
+high. Constructing the `Vector` by first creating a `Chain` will cost `O(N)` and
+thereafter the lookup cost is `O(1)`.
+
+
+### `OneAnd`
+
+Recall that `Foldable` is the Cats equivalent of a collections API and
+`Reducible` is for non-empty collections. We have already seen `NonEmptyList`
+and `NonEmptyChain` which provide `Reducible`, there is also `NonEmptySet`,
+`NonEmptyMap` and `NonEmptyVector` which wrap the standard library collections.
+The simple data structure `OneAnd` wraps any other collection to turn it into a
+`Reducible`:
+
+{lang="text"}
+~~~~~~~~
+  final case class OneAnd[F[_], A](head: A, tail: F[A])
+~~~~~~~~
+
+`NonEmptyList[A]` could be an alias to `OneAnd[List, A]`. Similarly, we can
+create non-empty `Stream`. However it may break ordering and uniqueness
+characteristics of the underlying structure: a `OneAnd[Set, A]` is not a
+non-empty `Set`, it is a `Set` with a guaranteed first element that may also be
+in the `Set`.
+
+
+## Summary
+
+In this chapter we have skimmed over the data types that Cats has to offer.
+
+It is not necessary to remember everything from this chapter: think of each
+section as having planted the kernel of an idea.
+
+The world of functional data structures is an active area of research. Academic
+publications appear regularly with new approaches to old problems. Implementing
+a functional data structure from the literature is a good contribution to the
+Cats ecosystem.
 
 

@@ -4871,7 +4871,7 @@ evidence that these effects are in fact commutative, or an asynchronous
 implementation may choose to sequence the operations to be on the safe side.
 
 The subtleties of how we deal with (re)-ordering of effects, and what
-those effects are, deserves a dedicated chapter on Advanced Monads.
+those effects are, deserves a dedicated chapter on Cats Monads.
 
 **** Commutativity
 
@@ -5608,11 +5608,6 @@ digraph G {
 #+RESULTS:
 [[file:images/shortest-fp-book.png]]
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 ** Cats Data Types
 
 In this chapter we will explore some Cats data types that augment the Scala
@@ -5664,7 +5659,7 @@ natural transformation to map between algebras. For example, in
 =Machines= algebra with an off-the-shelf algebra, =BigMachines=. Instead of
 changing all our business logic and tests to use this new =BigMachines=
 interface, we may be able to write a transformation from =Machines ~>
-BigMachines=. We will return to this idea in the chapter on Advanced Monads.
+BigMachines=. We will return to this idea in the chapter on Cats Monads.
 
 *** Containers
 
@@ -5674,21 +5669,20 @@ At first sight, =Validated= appears to be a clone of =Either=:
 
 #+BEGIN_SRC scala
 sealed abstract class Validated[+E, +A] { ... }
-final case class Success[A](a: A) extends Validated[Nothing, A]
-final case class Failure[E](e: E) extends Validated[E, Nothing]
+final case class Valid[+A](a: A) extends Validated[Nothing, A]
+final case class Invalid[+E](e: E) extends Validated[E, Nothing]
 
-type ValidatedNel[E, +X] = Validated[NonEmptyList[E], X]
+type ValidatedNel[+E, +A] = Validated[NonEmptyList[E], A]
 
 object Validated {
-  type \?/[+E, +A] = Validated[E, A]
+  def valid[E, A](a: A): Validated[E, A] = Valid(a)
+  def invalid[E, A](e: E): Validated[E, A] = Invalid(e)
+  def validNel[E, A](a: A): ValidatedNel[E, A] = Valid(a)
+  def invalidNel[E, A](e: E): ValidatedNel[E, A] = Validated.Invalid(NonEmptyList(e, Nil))
 
-  def success[E, A]: A => Validated[E, A] = Success(_)
-  def failure[E, A]: E => Validated[E, A] = Failure(_)
-  def failureNel[E, A](e: E): ValidatedNel[E, A] = Failure(NonEmptyList(e))
-
-  def lift[E, A](a: A)(f: A => Boolean, fail: E): Validated[E, A] = ...
-  def liftNel[E, A](a: A)(f: A => Boolean, fail: E): ValidatedNel[E, A] = ...
   def fromEither[E, A](e: Either[E, A]): Validated[E, A] = ...
+  def fromOption[A, B](o: Option[B], ifNone: => A): Validated[A, B] = ...
+  def fromIor[A, B](ior: Ior[A, B]): Validated[A, B] = ...
   ...
 }
 #+END_SRC
@@ -5697,37 +5691,25 @@ With convenient syntax
 
 #+BEGIN_SRC scala
 implicit class ValidatedOps[A](self: A) {
-  def success[X]: Validated[X, A] = Validated.success[X, A](self)
-  def successNel[X]: ValidatedNel[X, A] = success
-  def failure[X]: Validated[A, X] = Validated.failure[A, X](self)
-  def failureNel[X]: ValidatedNel[A, X] = Validated.failureNel[A, X](self)
+  def valid[B]: Validated[B, A] = ...
+  def validNel[B]: ValidatedNel[B, A] = ...
+  def invalid[B]: Validated[A, B] = ...
+  def invalidNel[B]: ValidatedNel[A, B] = ...
 }
 #+END_SRC
 
-However, the data structure itself is not the complete story.
-=Validated= intentionally does not have an instance of any =Monad=,
-restricting itself to success-biased versions of:
-
-- =Applicative=
-- =Traverse= / =Bitraverse=
-- =Cozip=
-- =Plus=
-- =Optional=
-
-and depending on the contents
-
-- =Equal= / =Order=
-- =Show=
-- =Semigroup= / =Monoid=
+However, the data structure itself is not the complete story. =Validated=
+intentionally does not have an instance of any =Monad=, restricting itself to
+success-biased versions of =Applicative=.
 
 The big advantage of restricting to =Applicative= is that =Validated=
 is explicitly for situations where we wish to report all failures,
-whereas =Disjunction= is used to stop at the first failure. To
+whereas =Either= is used to stop at the first failure. To
 accommodate failure accumulation, a popular form of =Validated= is
 =ValidatedNel=, having a =NonEmptyList[E]= in the failure position.
 
 Consider performing input validation of data provided by a user using
-=Disjunction= and =flatMap=:
+=Either= and =.flatMap=:
 
 #+BEGIN_SRC scala
 scala> :paste
@@ -5735,81 +5717,52 @@ scala> :paste
        final case class Username(value: String) extends AnyVal
        final case class Fullname(value: String) extends AnyVal
 
-       def username(in: String): String \/ Username =
-         if (in.isEmpty) "empty username".left
-         else if (in.contains(" ")) "username contains spaces".left
-         else Username(in).right
+       def username(in: String): Either[String, Username] =
+         if (in.isEmpty) Left("empty username")
+         else if (in.contains(" ")) Left("username contains spaces")
+         else Right(Username(in))
 
-       def realname(in: String): String \/ Fullname =
-         if (in.isEmpty) "empty real name".left
-         else Fullname(in).right
+       def realname(in: String): Either[String, Fullname] =
+         if (in.isEmpty) Left("empty real name")
+         else Right(Fullname(in))
 
 scala> for {
-         u <- username("sam halliday")
+         u <- username("zara turtle")
          r <- realname("")
        } yield Credentials(u, r)
-res = -\/(username contains spaces)
+res = Left(username contains spaces)
 #+END_SRC
 
-If we use ~|@|~ syntax
+If we use =.mapN= syntax
 
 #+BEGIN_SRC scala
-scala> (username("sam halliday") |@| realname("")) (Credentials.apply)
-res = -\/(username contains spaces)
+scala> (username("zara turtle"), realname("")).mapN (Credentials.apply)
+res = Left(username contains spaces)
 #+END_SRC
 
-we still get back the first failure. This is because =Disjunction= is
-a =Monad=, its =.applyX= methods must be consistent with =.flatMap=
+we still get back the first failure. This is because =Either= is
+a =Monad=, its =.mapX= methods must be consistent with =.flatMap=
 and not assume that any operations can be performed out of order.
 Compare to:
 
 #+BEGIN_SRC scala
 scala> :paste
        def username(in: String): ValidatedNel[String, Username] =
-         if (in.isEmpty) "empty username".failureNel
-         else if (in.contains(" ")) "username contains spaces".failureNel
-         else Username(in).success
+         if (in.isEmpty) "empty username".invalidNel
+         else if (in.contains(" ")) "username contains spaces".invalidNel
+         else Username(in).valid
 
        def realname(in: String): ValidatedNel[String, Fullname] =
-         if (in.isEmpty) "empty real name".failureNel
-         else Fullname(in).success
+         if (in.isEmpty) "empty real name".invalidNel
+         else Fullname(in).valid
 
-scala> (username("sam halliday") |@| realname("")) (Credentials.apply)
-res = Failure(NonEmpty[username contains spaces,empty real name])
+scala> (username("zara turtle") |@| realname("")) (Credentials.apply)
+res = Invalid(NonEmpty[username contains spaces,empty real name])
 #+END_SRC
 
 This time, we get back all the failures!
 
-=Validated= has many of the same methods as =Disjunction=, such as
-=.fold=, =.swap= and =+++=, plus some extra:
-
-#+BEGIN_SRC scala
-sealed abstract class Validated[+E, +A] {
-  def append[F >: E: Semigroup, B >: A: Semigroup](x: F \?/ B]): F \?/ B = ...
-
-  def disjunction: (E \/ A) = ...
-  ...
-}
-#+END_SRC
-
-=.append= (aliased by =+|+=) has the same type signature as =+++= but
-prefers the =success= case
-
-- =failure(v1) +|+ failure(v2)= gives =failure(v1 |+| v2)=
-- =failure(v1) +|+ success(v2)= gives =success(v2)=
-- =success(v1) +|+ failure(v2)= gives =success(v1)=
-- =success(v1) +|+ success(v2)= gives =success(v1 |+| v2)=
-
-#+BEGIN_ASIDE
-=+|+= the surprised c3p0 operator.
-#+END_ASIDE
-
-=.disjunction= converts a =Validated[A, B]= into an =A \/ B=.
-Disjunction has the mirror =.validation= and =.validationNel= to
-convert into =Validated=, allowing for easy conversion between
-sequential and parallel failure accumulation.
-
-=\/= and =Validated= are the more performant FP equivalent of a checked
+=Either= and =Validated= are the more performant FP equivalent of a checked
 exception for input validation, avoiding both a stacktrace and requiring the
 caller to deal with the failure resulting in more robust systems.
 
@@ -5817,7 +5770,7 @@ caller to deal with the failure resulting in more robust systems.
 One of the slowest things on the JVM is to create an exception, due to the
 resources required to construct the stacktrace. It is traditional to use
 exceptions for input validation and parsing, which can be thousands of times
-slower than the equivalent functions written with =\/= or =Validated=.
+slower than the equivalent functions written with =Either= or =Validated=.
 
 Some people claim that predictable exceptions for input validation are
 referentially transparent because they will occur every time. However, the
@@ -5827,109 +5780,45 @@ Regardless, throwing an exception is not pure because it means the function is
 not /Total/.
 #+END_ASIDE
 
-**** These
+**** Ior
 
-We encountered =These=, a data encoding of inclusive logical =OR=,
+We encountered =Ior=, a data encoding of inclusive logical =OR=,
 when we learnt about =Align=.
 
 #+BEGIN_SRC scala
-sealed abstract class \&/[+A, +B] { ... }
-object \&/ {
-  type These[A, B] = A \&/ B
+sealed abstract class Ior[+A, +B]
+final case class Left[A](a: A) extends Ior[A, Nothing]
+final case class Right[B](b: B) extends Ior[Nothing, B]
+final case class Both[A, B](a: A, b: B) extends Ior[A, B]
 
-  final case class This[A](aa: A) extends (A \&/ Nothing)
-  final case class That[B](bb: B) extends (Nothing \&/ B)
-  final case class Both[A, B](aa: A, bb: B) extends (A \&/ B)
+type IorNel[+B, +A] = Ior[NonEmptyList[B], A]
 
-  def apply[A, B](a: A, b: B): These[A, B] = Both(a, b)
+object Ior {
+  def left[A, B](a: A): A Ior B = ...
+  def right[A, B](b: B): A Ior B = ...
+  def both[A, B](a: A, b: B): A Ior B = ...
+  def leftNel[A, B](a: A): IorNel[A, B] = ...
+  def bothNel[A, B](a: A, b: B): IorNel[A, B] = ...
 }
 #+END_SRC
 
-with convenient construction syntax
+=.flatMap= is right-biased (=Both= and =Right=), taking a =Semigroup=
+of the =Left= content to combine rather than break early.
 
-#+BEGIN_SRC scala
-implicit class TheseOps[A](self: A) {
-  final def wrapThis[B]: A \&/ B = \&/.This(self)
-  final def wrapThat[B]: B \&/ A = \&/.That(self)
-}
-implicit class ThesePairOps[A, B](self: (A, B)) {
-  final def both: A \&/ B = \&/.Both(self._1, self._2)
-}
-#+END_SRC
-
-=These= has typeclass instances for
-
-- =Monad=
-- =Bitraverse=
-- =Traverse=
-- =CoflatMap=
-
-and depending on contents
-
-- =Semigroup= / =Monoid= / =Band=
-- =Equal= / =Order=
-- =Show=
-
-=These= (=\&/=) has many of the methods we have come to expect of
-=Disjunction= (=\/=) and =Validated= (=\?/=)
-
-#+BEGIN_SRC scala
-sealed abstract class \&/[+A, +B] {
-  def fold[X](s: A => X, t: B => X, q: (A, B) => X): X = ...
-  def swap: (B \&/ A) = ...
-
-  def append[X >: A: Semigroup, Y >: B: Semigroup](o: =>(X \&/ Y)): X \&/ Y = ...
-
-  def &&&[X >: A: Semigroup, C](t: X \&/ C): X \&/ (B, C) = ...
-  ...
-}
-#+END_SRC
-
-=.append= has 9 possible arrangements and data is never thrown away
-because cases of =This= and =That= can always be converted into a
-=Both=.
-
-=.flatMap= is right-biased (=Both= and =That=), taking a =Semigroup=
-of the left content (=This=) to combine rather than break early. =&&&=
-is a convenient way of binding over two of /these/, creating a tuple
-on the right and dropping data if it is not present in each of
-/these/.
-
-Although it is tempting to use =\&/= in return types, overuse is an
-anti-pattern. The main reason to use =\&/= is to combine or split
-potentially infinite /streams/ of data in finite memory. Convenient
-functions exist on the companion to deal with =EphemeralStream=
-(aliased here to fit in a single line) or anything with a =MonadPlus=
-
-#+BEGIN_SRC scala
-type EStream[A] = EphemeralStream[A]
-
-object \&/ {
-  def concatThisStream[A, B](x: EStream[A \&/ B]): EStream[A] = ...
-  def concatThis[F[_]: MonadPlus, A, B](x: F[A \&/ B]): F[A] = ...
-
-  def concatThatStream[A, B](x: EStream[A \&/ B]): EStream[B] = ...
-  def concatThat[F[_]: MonadPlus, A, B](x: F[A \&/ B]): F[B] = ...
-
-  def unalignStream[A, B](x: EStream[A \&/ B]): (EStream[A], EStream[B]) = ...
-  def unalign[F[_]: MonadPlus, A, B](x: F[A \&/ B]): (F[A], F[B]) = ...
-
-  def merge[A: Semigroup](t: A \&/ A): A = ...
-  ...
-}
-#+END_SRC
+Although it is tempting to use =Ior= in return types, overuse is an
+anti-pattern, because it is more difficult for the caller to consider three
+scenarios (roughly failure, partial failure, and success) than regular failure
+and success.
 
 **** Higher Kinded Either
 
-The =Coproduct= data type (not to be confused with the more general concept of a
-/coproduct/ in an ADT) wraps =Disjunction= for type constructors:
+The =EitherK= data type wraps =Either= for type constructors:
 
 #+BEGIN_SRC scala
-final case class Coproduct[F[_], G[_], A](run: F[A] \/ G[A]) { ... }
-object Coproduct {
-  def leftc[F[_], G[_], A](x: F[A]): Coproduct[F, G, A] = Coproduct(-\/(x))
-  def rightc[F[_], G[_], A](x: G[A]): Coproduct[F, G, A] = Coproduct(\/-(x))
-  ...
+final case class EitherK[F[_], G[_], A](run: Either[F[A], G[A]])
+object EitherK {
+  def leftc[F[_], G[_], A](x: F[A]): EitherK[F, G, A] = ...
+  def rightc[F[_], G[_], A](x: G[A]): EitherK[F, G, A] = ...
 }
 #+END_SRC
 
@@ -5938,49 +5827,15 @@ Typeclass instances simply delegate to those of the =F[_]= and =G[_]=.
 The most popular use case for =Coproduct= is when we want to create an anonymous
 coproduct of multiple ADTs.
 
-# https://github.com/scala/scala/pull/5538
-
-**** Not So Eager
-
-Built-in Scala tuples, and basic data types like =Maybe= and
-=Disjunction= are eagerly-evaluated value types.
-
-For convenience, /by-name/ alternatives to =Name= are provided, having
-the expected typeclass instances:
-
-#+BEGIN_SRC scala
-sealed abstract class LazyTuple2[A, B] {
-  def _1: A
-  def _2: B
-}
-...
-sealed abstract class LazyTuple4[A, B, C, D] {
-  def _1: A
-  def _2: B
-  def _3: C
-  def _4: D
-}
-
-sealed abstract class LazyOption[+A] { ... }
-private final case class LazySome[A](a: () => A) extends LazyOption[A]
-private case object LazyNone extends LazyOption[Nothing]
-
-sealed abstract class LazyEither[+A, +B] { ... }
-private case class LazyLeft[A, B](a: () => A) extends LazyEither[A, B]
-private case class LazyRight[A, B](b: () => B) extends LazyEither[A, B]
-#+END_SRC
-
-The astute reader will note that =Lazy*= is a misnomer, and these data
-types should perhaps be: =ByNameTupleX=, =ByNameOption= and
-=ByNameEither=.
-
 **** Const
 
 =Const=, for /constant/, is a wrapper for a value of type =A=, along with a
 spare type parameter =B=.
 
 #+BEGIN_SRC scala
-final case class Const[A, B](getConst: A)
+final case class Const[A, B](getConst: A) {
+  def retag[C]: Const[A, C] = ...
+}
 #+END_SRC
 
 =Const= provides an instance of =Applicative[Const[A, ?]]= if there is a
@@ -5989,10 +5844,10 @@ final case class Const[A, B](getConst: A)
 #+BEGIN_SRC scala
 implicit def applicative[A: Monoid]: Applicative[Const[A, ?]] =
   new Applicative[Const[A, ?]] {
-    def point[B](b: =>B): Const[A, B] =
-      Const(Monoid[A].zero)
-    def ap[B, C](fa: =>Const[A, B])(fbc: =>Const[A, B => C]): Const[A, C] =
-      Const(fbc.getConst |+| fa.getConst)
+    def pure[B](b: B): Const[A, B] = Const(Monoid[A].empty)
+    def ap[A, B](f: Const[C, A => B])(fa: Const[C, A]): Const[C, B] =
+      f.retag[B].combine(fa.retag[B])
+    ...
   }
 #+END_SRC
 
@@ -6010,11 +5865,11 @@ final class DynAgentsModule[F[_]: Applicative](D: Drone[F], M: Machines[F])
   ...
   def act(world: WorldView): F[WorldView] = world match {
     case NeedsAgent(node) =>
-      M.start(node) >| world.copy(pending = Map(node -> world.time))
+      M.start(node) as world.copy(pending = Map(node -> world.time))
 
     case Stale(nodes) =>
       nodes.traverse { node =>
-        M.stop(node) >| node
+        M.stop(node) as node
       }.map { stopped =>
         val updates = stopped.strengthR(world.time).toList.toMap
         world.copy(pending = world.pending ++ updates)
@@ -6066,7 +5921,7 @@ called:
 #+END_SRC
 
 Alternatively, we could have counted total method calls by using =Const[Int, ?]=
-or an =IMap[String, Int]=.
+or an =Map[String, Int]=.
 
 With this test, we've gone beyond traditional /Mock/ testing with a =Const= test
 that asserts on /what is called/ without having to provide implementations. This
@@ -6075,9 +5930,9 @@ input, e.g. for accounting purposes. Furthermore, we've achieved this with
 compiletime safety.
 
 Taking this line of thinking a little further, say we want to monitor (in
-production) the nodes that we are stopping in =act=. We can create
+production) the nodes that we are stopping in =.act=. We can create
 implementations of =Drone= and =Machines= with =Const=, calling it from our
-wrapped version of =act=
+wrapped version of =.act=
 
 #+BEGIN_SRC scala
 final class Monitored[U[_]: Functor](program: DynAgents[U]) {
@@ -6127,7 +5982,7 @@ Programming/, once popular in Java. We built on top of our business logic to
 support a monitoring concern, without having to complicate the business logic.
 
 It gets even better. We can run =ConstImpl= in production to gather what we want
-to =stop=, and then provide an *optimised* implementation of =act= that can make
+to =.stop=, and then provide an *optimised* implementation of =act= that can make
 use of implementation-specific batched calls.
 
 The silent hero of this story is =Applicative=. =Const= lets us show off what is
@@ -6136,1585 +5991,84 @@ longer use =Const= and must write full mocks to be able to assert on what is
 called under certain inputs. The /Rule of Least Power/ demands that we use
 =Applicative= instead of =Monad= wherever we can.
 
-*** Collections
+**** Chain
 
-Unlike the stdlib Collections API, the Scalaz approach describes collection
-behaviours in the typeclass hierarchy, e.g. =Foldable=, =Traverse=, =Monoid=.
-What remains to be studied are the implementations in terms of data structures,
-which have different performance characteristics and niche methods.
-
-This section goes into the implementation details for each data type. It is not
-essential to remember everything presented here: the goal is to gain a high
-level understanding of how each data structure works.
-
-Because all the collection data types provide more or less the same list of
-typeclass instances, we shall avoid repeating the list, which is often some
-variation of:
-
-- =Monoid=
-- =Traverse= / =Foldable=
-- =MonadPlus= / =IsEmpty=
-- =CoflatMap= / =Comonad=
-- =Zip= / =Unzip=
-- =Align=
-- =Equal= / =Order=
-- =Show=
-
-Data structures that are provably non-empty are able to provide
-
-- =Traverse1= / =Foldable1=
-
-and provide =Semigroup= instead of =Monoid=, =Plus= instead of =IsEmpty=.
-
-**** Lists
-
-We have used =IList[A]= and =NonEmptyList[A]= so many times by now that they
-should be familiar. They codify a classic linked list data structure:
+=Chain= is a catenable sequence that supports =O(1)= appending, prepending and
+concatenation. It is especially useful if we need to construct a collection by
+concatening existing collections (that may be any =Seq=), adding individual
+elements (by pre-pending or appending) or concatenating existing =Chain= values.
 
 #+BEGIN_SRC scala
-sealed abstract class IList[A] {
-  def ::(a: A): IList[A] = ...
-  def :::(as: IList[A]): IList[A] = ...
+sealed abstract class Chain[+A] {
+  def prepend[A2 >: A](a: A2): Chain[A2] = ...
+  def append[A2 >: A](a: A2): Chain[A2] = ...
+  def concat[A2 >: A](c: Chain[A2]): Chain[A2] = ...
+
   def toList: List[A] = ...
-  def toNel: Option[NonEmptyList[A]] = ...
+  def toVector: Vector[A] = ...
+
+  def groupBy[B: Order](f: A => B): SortedMap[B, NonEmptyChain[A]] = ...
   ...
 }
-final case class INil[A]() extends IList[A]
-final case class ICons[A](head: A, tail: IList[A]) extends IList[A]
 
-final case class NonEmptyList[A](head: A, tail: IList[A]) {
-  def <::(b: A): NonEmptyList[A] = nel(b, head :: tail)
-  def <:::(bs: IList[A]): NonEmptyList[A] = ...
-  ...
-}
-#+END_SRC
+object Chain {
+  case object Empty extends Chain[Nothing]
+  final case class Singleton[A](a: A) extends Chain[A]
+  final case class Append[A](left: Chain[A], right: Chain[A]) extends Chain[A]
+  final case class Wrap[A](seq: Seq[A]) extends Chain[A]
 
-#+BEGIN_ASIDE
-The source code for Scalaz 7.3 reveals that =INil= is implemented as
-
-#+BEGIN_SRC scala
-sealed abstract case class INil[A] private() extends IList[A]
-object INil {
-  private[this] val value: INil[Nothing] = new INil[Nothing]{}
-  def apply[A](): IList[A] = value.asInstanceOf[IList[A]]
-}
-#+END_SRC
-
-which exploits JVM implementation details to avoid an object allocation when
-creating an =INil=.
-
-This optimisation is manually applied to all zero-parameter classes. Indeed,
-Scalaz is full of many optimisations of this nature: debated and accepted only
-when presented with evidence of a significant performance boost and no risk of a
-semantic change.
-#+END_ASIDE
-
-The main advantage of =IList= over stdlib =List= is that there are no
-unsafe methods, like =.head= which throws an exception on an empty
-list.
-
-In addition, =IList= is a *lot* simpler, having no hierarchy and a
-much smaller bytecode footprint. Furthermore, the stdlib =List= has a
-terrifying implementation that uses =var= to workaround performance
-problems in the stdlib collection design:
-
-#+BEGIN_SRC scala
-package scala.collection.immutable
-
-sealed abstract class List[+A]
-  extends AbstractSeq[A]
-  with LinearSeq[A]
-  with GenericTraversableTemplate[A, List]
-  with LinearSeqOptimized[A, List[A]] { ... }
-case object Nil extends List[Nothing] { ... }
-final case class ::[B](
-  override val head: B,
-  private[scala] var tl: List[B]
-) extends List[B] { ... }
-#+END_SRC
-
-=List= creation requires careful, and slow, =Thread= synchronisation
-to ensure safe publishing. =IList= requires no such hacks and can
-therefore outperform =List=.
-
-#+BEGIN_ASIDE
-Isn't =NonEmptyList= just the same as =ICons=? Yes, at a data structure level.
-But the difference is that =ICons= is part of the =IList= ADT whereas
-=NonEmptyList= is outside it. Typeclass instances should always be provided at
-the level of an ADT, not for each entry, to avoid complexity.
-#+END_ASIDE
-
-**** =EphemeralStream=
-
-The stdlib =Stream= is a lazy version of =List=, but is riddled with
-memory leaks and unsafe methods. =EphemeralStream= does not keep
-references to computed values, helping to alleviate the memory
-retention problem, and removing unsafe methods in the same spirit as
-=IList=.
-
-#+BEGIN_SRC scala
-sealed abstract class EphemeralStream[A] {
-  def headOption: Option[A]
-  def tailOption: Option[EphemeralStream[A]]
-  ...
-}
-// private implementations
-object EphemeralStream extends EphemeralStreamInstances {
-  type EStream[A] = EphemeralStream[A]
-
-  def emptyEphemeralStream[A]: EStream[A] = ...
-  def cons[A](a: =>A, as: =>EStream[A]): EStream[A] = ...
-  def unfold[A, B](start: =>B)(f: B => Option[(A, B)]): EStream[A] = ...
-  def iterate[A](start: A)(f: A => A): EStream[A] = ...
-
-  implicit class ConsWrap[A](e: =>EStream[A]) {
-    def ##::(h: A): EStream[A] = cons(h, e)
-  }
-  object ##:: {
-    def unapply[A](xs: EStream[A]): Option[(A, EStream[A])] =
-      if (xs.isEmpty) None
-      else Some((xs.head(), xs.tail()))
-  }
+  def empty[A]: Chain[A] = ...
+  def one[A](a: A): Chain[A] = ...
+  def fromSeq[A](s: Seq[A]): Chain[A] = ...
   ...
 }
 #+END_SRC
 
-#+BEGIN_ASIDE
-The use of the word /stream/ for a data structure of this nature comes down to
-legacy. /Stream/ is now used by marketing departments alongside the ✨ /Reactive
-Manifesto/ ✨ and implementing frameworks like Akka Streams.
-#+END_ASIDE
-
-=.cons=, =.unfold= and =.iterate= are mechanisms for creating streams, and the
-convenient syntax =##::= puts a new element at the head of a by-name =EStream=
-reference. =.unfold= is for creating a finite (but possibly infinite) stream by
-repeatedly applying a function =f= to get the next value and input for the
-following =f=. =.iterate= creates an infinite stream by repeating a function =f=
-on the previous element.
-
-=EStream= may appear in pattern matches with the symbol =##::=,
-matching the syntax for =.cons=.
-
-#+BEGIN_ASIDE
-=##::= sort of looks like an Exogorth: a giant space worm that lives
-on an asteroid.
-#+END_ASIDE
-
-Although =EStream= addresses the value memory retention problem, it is
-still possible to suffer from /slow memory leaks/ if a live reference
-points to the head of an infinite stream. Problems of this nature, as
-well as the need to compose effectful streams, are why fs2 exists.
-
-**** =CorecursiveList=
-
-# https://github.com/scalaz/scalaz/pull/1193
-# http://jyp.github.io/posts/controlled-fusion.html
-
-/Corecursion/ is when we start from a base state and produce subsequent steps
-deterministically, like the =EphemeralStream.unfold= method that we just
-studied:
-
-#+BEGIN_SRC scala
-def unfold[A, B](b: =>B)(f: B => Option[(A, B)]): EStream[A] = ...
-#+END_SRC
-
-Contrast to /recursion/, which breaks data into a base state and then
-terminates.
-
-A =CorecursiveList= is a data encoding of =EphemeralStream.unfold=, offering an
-alternative to =EStream= that may perform better in some circumstances:
-
-#+BEGIN_SRC scala
-sealed abstract class CorecursiveList[A] {
-  type S
-  def init: S
-  def step: S => Maybe[(S, A)]
-}
-
-object CorecursiveList {
-  private final case class CorecursiveListImpl[S0, A](
-    init: S0,
-    step: S0 => Maybe[(S0, A)]
-  ) extends CorecursiveList[A] { type S = S0 }
-
-  def apply[S, A](init: S)(step: S => Maybe[(S, A)]): CorecursiveList[A] =
-    CorecursiveListImpl(init, step)
-
-  ...
-}
-#+END_SRC
-
-Corecursion is useful when implementing =Comonad.cojoin=, like our =Hood=
-example. =CorecursiveList= is a good way to codify non-linear recurrence
-equations like those used in biology population models, control systems, macro
-economics, and investment banking models.
-
-**** =ImmutableArray=
-
-A simple wrapper around mutable stdlib =Array=, with primitive
-specialisations:
-
-#+BEGIN_SRC scala
-sealed abstract class ImmutableArray[+A] {
-  def ++[B >: A: ClassTag](o: ImmutableArray[B]): ImmutableArray[B]
-  ...
-}
-object ImmutableArray {
-  final class StringArray(s: String) extends ImmutableArray[Char] { ... }
-  sealed class ImmutableArray1[+A](as: Array[A]) extends ImmutableArray[A] { ... }
-  final class ofRef[A <: AnyRef](as: Array[A]) extends ImmutableArray1[A](as)
-  ...
-  final class ofLong(as: Array[Long]) extends ImmutableArray1[Long](as)
-
-  def fromArray[A](x: Array[A]): ImmutableArray[A] = ...
-  def fromString(str: String): ImmutableArray[Char] = ...
-  ...
-}
-#+END_SRC
-
-=Array= is unrivalled in terms of read performance and heap size.
-However, there is zero structural sharing when creating new arrays,
-therefore arrays are typically used only when their contents are not
-expected to change, or as a way of safely wrapping raw data from a
-legacy system.
-
-**** =Dequeue=
-
-A =Dequeue= (pronounced like a "deck" of cards) is a linked list that
-allows items to be put onto or retrieved from the front (=cons=) or
-the back (=snoc=) in constant time. Removing an element from either
-end is constant time on average.
-
-#+BEGIN_SRC scala
-sealed abstract class Dequeue[A] {
-  def frontMaybe: Maybe[A]
-  def backMaybe: Maybe[A]
-
-  def ++(o: Dequeue[A]): Dequeue[A] = ...
-  def +:(a: A): Dequeue[A] = cons(a)
-  def :+(a: A): Dequeue[A] = snoc(a)
-  def cons(a: A): Dequeue[A] = ...
-  def snoc(a: A): Dequeue[A] = ...
-  def uncons: Maybe[(A, Dequeue[A])] = ...
-  def unsnoc: Maybe[(A, Dequeue[A])] = ...
-  ...
-}
-private final case class SingletonDequeue[A](single: A) extends Dequeue[A] { ... }
-private final case class FullDequeue[A](
-  front: NonEmptyList[A],
-  fsize: Int,
-  back: NonEmptyList[A],
-  backSize: Int) extends Dequeue[A] { ... }
-private final case object EmptyDequeue extends Dequeue[Nothing] { ... }
-
-object Dequeue {
-  def empty[A]: Dequeue[A] = EmptyDequeue()
-  def apply[A](as: A*): Dequeue[A] = ...
-  def fromFoldable[F[_]: Foldable, A](fa: F[A]): Dequeue[A] = ...
-  ...
-}
-#+END_SRC
-
-The way it works is that there are two lists, one for the front data
-and another for the back. Consider an instance holding symbols =a0,
-a1, a2, a3, a4, a5, a6=
-
-#+BEGIN_SRC scala
-FullDequeue(
-  NonEmptyList('a0, IList('a1, 'a2, 'a3)), 4,
-  NonEmptyList('a6, IList('a5, 'a4)), 3)
-#+END_SRC
-
-which can be visualised as
-
-#+BEGIN_SRC dot :cmd dot :file images/dequeue.png :exports results
-digraph G {
-    graph [dpi=300];
-    node [fontname=Hack];
-
-    subgraph cluster_front {
-        label = "front";
-        subgraph cluster_front_tail {
-            label = "tail        "
-            style=filled;
-            color=lightgrey;
-            node [style=filled,color=white];
-            a1;
-            a1 -> a2 -> a3;
-        }
-        a0;
-        a0 -> a1;
-    }
-
-    subgraph cluster_back {
-        label = "back";
-        subgraph cluster_back_tail {
-            node [style=filled,fontcolor=white,color=lightgray];
-            a5 -> a4
-            label = "tail        ";
-            color=lightgray;
-        }
-        a6 [style=filled,color=lightgray,fontcolor=white];
-        a6 -> a5;
-    }
-}
-#+END_SRC
-
-#+CAPTION: 30
-#+RESULTS:
-[[file:images/dequeue.png]]
-
-Note that the list holding the =back= is in reverse order.
-
-Reading the =snoc= (final element) is a simple lookup into
-=back.head=. Adding an element to the end of the =Dequeue= means
-adding a new element to the head of the =back=, and recreating the
-=FullDequeue= wrapper (which will increase =backSize= by one). Almost
-all of the original structure is shared. Compare to adding a new
-element to the end of an =IList=, which would involve recreating the
-entire structure.
-
-The =frontSize= and =backSize= are used to re-balance the =front= and
-=back= so that they are always approximately the same size.
-Re-balancing means that some operations can be slower than others
-(e.g. when the entire structure must be rebuilt) but because it
-happens only occasionally, we can take the average of the cost and say
-that it is constant.
-
-**** =DList=
-
-# http://h2.jaguarpaw.co.uk/posts/demystifying-dlist/
-
-Linked lists have poor performance characteristics when large lists are appended
-together. Consider the work that goes into evaluating the following:
-
-#+BEGIN_SRC scala
-((as ::: bs) ::: (cs ::: ds)) ::: (es ::: (fs ::: gs))
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/dlist-list-append.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT];
-    node [fontname=Hack];
-
-    as;bs;cs;ds;es;fs;gs;
-    c1 [label = ":::", ];
-    c2 [label = ":::"];
-    c3 [label = ":::"];
-    c4 [label = ":::"];
-    c5 [label = ":::"];
-    c6 [label = ":::"];
-
-    as -> c1 [penwidth=3];
-    bs -> c1;
-
-    cs -> c2 [penwidth=3];
-    ds -> c2;
-
-    c1 -> c3 [penwidth=3];
-    c2 -> c3;
-
-    es -> c4 [penwidth=3];
-
-    fs -> c5 [penwidth=3];
-    gs -> c5;
-    c5 -> c4;
-
-    c3 -> c6 [penwidth=3];
-    c4 -> c6;
-}
-#+END_SRC
-
-#+CAPTION: 50
-#+RESULTS:
-[[file:images/dlist-list-append.png]]
-
-This creates six intermediate lists, traversing and rebuilding every list three
-times (except for =gs= which is shared between all stages).
-
-The =DList= (for /difference list/) is a more efficient solution for this
-scenario. Instead of performing the calculations at each stage, it is
-represented as a function ~IList[A] => IList[A]~
-
-#+BEGIN_SRC scala
-final case class DList[A](f: IList[A] => IList[A]) {
-  def toIList: IList[A] = f(IList.empty)
-  def ++(as: DList[A]): DList[A] = DList(xs => f(as.f(xs)))
-  ...
-}
-object DList {
-  def fromIList[A](as: IList[A]): DList[A] = DList(xs => as ::: xs)
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-This is a simplified implementation: it has a stack overflow bug that we will
-fix in the chapter on Advanced Monads.
-#+END_ASIDE
-
-The equivalent calculation is (the symbols created via =DList.fromIList=)
-
-#+BEGIN_SRC scala
-(((a ++ b) ++ (c ++ d)) ++ (e ++ (f ++ g))).toIList
-#+END_SRC
-
-which breaks the work into /right-associative/ (i.e. fast) appends
-
-#+BEGIN_SRC scala
-(as ::: (bs ::: (cs ::: (ds ::: (es ::: (fs ::: gs))))))
-#+END_SRC
-
-utilising the fast constructor on =IList=.
-
-As always, there is no free lunch. There is a memory allocation overhead that
-can slow down code that naturally results in right-associative appends. The
-largest speedup is when =IList= operations are /left-associative/, e.g.
-
-#+BEGIN_SRC scala
-((((((as ::: bs) ::: cs) ::: ds) ::: es) ::: fs) ::: gs)
-#+END_SRC
-
-Difference lists suffer from bad marketing. If they were called a
-=ListBuilderFactory= they'd probably be in the standard library.
-
-**** =ISet=
-
-Tree structures are excellent for storing ordered data, with every /binary node/
-holding elements that are /less than/ in one branch, and /greater than/ in the
-other. However, naive implementations of a tree structure can become
-/unbalanced/ depending on the insertion order. It is possible to maintain a
-perfectly balanced tree, but it is incredibly inefficient as every insertion
-effectively rebuilds the entire tree.
-
-=ISet= is an implementation of a tree of /bounded balance/, meaning that it is
-approximately balanced, using the =size= of each branch to balance a node.
-
-#+BEGIN_SRC scala
-sealed abstract class ISet[A] {
-  val size: Int = this match {
-    case Tip()        => 0
-    case Bin(_, l, r) => 1 + l.size + r.size
-  }
-  ...
-}
-object ISet {
-  private final case class Tip[A]() extends ISet[A]
-  private final case class Bin[A](a: A, l: ISet[A], r: ISet[A]) extends ISet[A]
-
-  def empty[A]: ISet[A] = Tip()
-  def singleton[A](x: A): ISet[A] = Bin(x, Tip(), Tip())
-  def fromFoldable[F[_]: Foldable, A: Order](xs: F[A]): ISet[A] =
-    xs.foldLeft(empty[A])((a, b) => a insert b)
-  ...
-}
-#+END_SRC
-
-=ISet= requires =A= to have an =Order=. The =Order[A]= instance must remain the
-same between calls or internal assumptions will be invalid, leading to data
-corruption: i.e. we are assuming typeclass coherence such that =Order[A]= is
-unique for any =A=.
-
-The =ISet= ADT unfortunately permits invalid trees. We strive to write ADTs that
-fully describe what is and isn't valid through type restrictions, but sometimes
-there are situations where it can only be achieved by the inspired touch of an
-immortal. Instead, =Tip= / =Bin= are =private=, to stop users from accidentally
-constructing invalid trees. =.insert= is the only way to build an =ISet=,
-therefore defining what constitutes a valid tree.
-
-#+BEGIN_SRC scala
-sealed abstract class ISet[A] {
-  ...
-  def contains(x: A)(implicit o: Order[A]): Boolean = ...
-  def union(other: ISet[A])(implicit o: Order[A]): ISet[A] = ...
-  def delete(x: A)(implicit o: Order[A]): ISet[A] = ...
-
-  def insert(x: A)(implicit o: Order[A]): ISet[A] = this match {
-    case Tip() => ISet.singleton(x)
-    case self @ Bin(y, l, r) => o.order(x, y) match {
-      case LT => balanceL(y, l.insert(x), r)
-      case GT => balanceR(y, l, r.insert(x))
-      case EQ => self
-    }
-  }
-  ...
-}
-#+END_SRC
-
-The internal methods =.balanceL= and =.balanceR= are mirrors of each other, so
-we only study =.balanceL=, which is called when the value we are inserting is
-/less than/ the current node. It is also called by the =.delete= method.
-
-# https://downloads.haskell.org/~ghc/latest/docs/html/libraries/containers-0.5.10.2/src/Data-Set-Internal.html#Set
-
-#+BEGIN_SRC scala
-def balanceL[A](y: A, left: ISet[A], right: ISet[A]): ISet[A] = (left, right) match {
-...
-#+END_SRC
-
-Balancing requires us to classify the scenarios that can occur. We will go
-through each possible scenario, visualising the =(y, left, right)= on the left
-side of the page, with the balanced structure on the right, also known as the
-/rotated tree/.
-
-- filled circles visualise a =Tip=
-- three columns visualise the =left | value | right= fields of =Bin=
-- diamonds visualise any =ISet=
-
-The first scenario is the trivial case, which is when both the =left= and
-=right= are =Tip=. In fact we will never encounter this scenario from =.insert=,
-but we hit it in =.delete=
-
-#+BEGIN_SRC scala
-case (Tip(), Tip()) => singleton(y)
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-1.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=point,width=0.2];
-      right [shape=point,width=0.2];
-      left -> y [style=invis];
-      right -> y [style=invis];
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record, label="<left> | <y> y | <right>"];
-      left_ [shape=point,width=0.2];
-      right_ [shape=point,width=0.2];
-      left_ -> y_:left;
-      right_ -> y_:right;
-    }
-}
-#+END_SRC
-
-#+CAPTION: 50
-#+RESULTS:
-[[file:images/balanceL-1.png]]
-
-The second case is when =left= is a =Bin= containing only =Tip=, we don't need
-to balance anything, we just create the obvious connection:
-
-#+BEGIN_SRC scala
-case (Bin(lx, Tip(), Tip()), Tip()) => Bin(y, left, Tip())
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-2.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=record, label="<left> | <y> lx | <right>"];
-      right [shape=point,width=0.2];
-      left -> y [style=invis];
-      right -> y [style=invis];
-      left_left [shape=point,width=0.2];
-      left_right [shape=point,width=0.2];
-      left_left -> left:left;
-      left_right -> left:right;
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record, label="<left> | <y> y | <right>"];
-      left_ [shape=record, label="<left> | <y> lx | <right>"];
-      right_ [shape=point,width=0.2];
-      left_ -> y_:left;
-      right_ -> y_:right;
-
-      left_left_ [shape=point,width=0.2];
-      left_right_ [shape=point,width=0.2];
-      left_left_ -> left_:left;
-      left_right_ -> left_:right;
-
-    }
-}
-#+END_SRC
-
-#+CAPTION: 60
-#+RESULTS:
-[[file:images/balanceL-2.png]]
-
-The third case is when it starts to get interesting: =left= is a =Bin=
-containing a =Bin= in its =right=
-
-#+BEGIN_SRC scala
-case (Bin(lx, Tip(), Bin(lrx, _, _)), Tip()) =>
-  Bin(lrx, singleton(lx), singleton(y))
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-3.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=record, label="<left> | <y> lx | <right>"];
-      right [shape=point,width=0.2];
-      left -> y [style=invis];
-      right -> y [style=invis];
-      left_left [shape=point,width=0.2];
-      left_right [shape=record, label="<left> | <y> lrx | <right>"];
-      left_left -> left:left;
-      left_right -> left:right;
-      left_right_left [label="",shape=diamond];
-      left_right_right [label="",shape=diamond];
-      left_right_left -> left_right:left;
-      left_right_right -> left_right:right;
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-    hack_3 [style=invis];
-    hack_3 -> hack_2 [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record, label="<left> | <y> lrx | <right>"];
-      left_ [shape=record, label="<left> | <y> lx | <right>"];
-      right_ [shape=record, label="<left> | <y> y | <right>"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-
-      left_left_ [shape=point,width=0.2];
-      left_right_ [shape=point,width=0.2];
-      left_left_ -> left_:left;
-      left_right_ -> left_:right;
-
-      right_left_ [shape=point,width=0.2];
-      right_right_ [shape=point,width=0.2];
-      right_left_ -> right_:left;
-      right_right_ -> right_:right;
-
-    }
-}
-#+END_SRC
-
-#+CAPTION: 70
-#+RESULTS:
-[[file:images/balanceL-3.png]]
-
-But what happened to the two diamonds sitting below =lrx=? Didn't we just lose
-information? No, we didn't lose information, because we can reason (based on
-size balancing) that they are always =Tip=! There is no rule in any of the
-following scenarios (or in =.balanceR=) that can produce a tree of the shape
-where the diamonds are =Bin=.
-
-The fourth case is the opposite of the third case.
-
-#+BEGIN_SRC scala
-case (Bin(lx, ll, Tip()), Tip()) => Bin(lx, ll, singleton(y))
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-4.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=record, label="<left> | <y> lx | <right>"];
-      right [shape=point,width=0.2];
-      left -> y [style=invis];
-      right -> y [style=invis];
-      left_left [label="ll",shape=diamond];
-      left_right [shape=point,width=0.2];
-      left_left -> left:left;
-      left_right -> left:right;
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record, label="<left> | <y> lx | <right>"];
-      left_ [label="ll",shape=diamond];
-      right_ [shape=record, label="<left> | <y> y | <right>"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-
-      right_left_ [shape=point,width=0.2];
-      right_right_ [shape=point,width=0.2];
-      right_left_ -> right_:left;
-      right_right_ -> right_:right;
-
-    }
-}
-#+END_SRC
-
-#+CAPTION: 70
-#+RESULTS:
-[[file:images/balanceL-4.png]]
-
-The fifth case is when we have full trees on both sides of the =left= and we
-must use their relative sizes to decide on how to re-balance.
-
-#+BEGIN_SRC scala
-case (Bin(lx, ll, lr), Tip()) if (2*ll.size > lr.size) =>
-  Bin(lx, ll, Bin(y, lr, Tip()))
-case (Bin(lx, ll, Bin(lrx, lrl, lrr)), Tip()) =>
-  Bin(lrx, Bin(lx, ll, lrl), Bin(y, lrr, Tip()))
-#+END_SRC
-
-For the first branch, ~2*ll.size > lr.size~
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-5a.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=record, label="<left> | <y> lx | <right>"];
-      right [shape=point,width=0.2];
-      left -> y [style=invis];
-      right -> y [style=invis];
-      left_left [shape=diamond,label="ll",penwidth=3];
-      left_right [shape=diamond, label="lr"];
-      left_left -> left:left;
-      left_right -> left:right;
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-    hack_3 [style=invis];
-    hack_3 -> hack_2 [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record,label="<left> | <y> lx | <right>"];
-      left_ [shape=diamond,label="ll"];
-      right_ [shape=record,label="<left> | <y> y | <right>"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-
-      right_left_ [shape=diamond,label="lr"];
-      right_right_ [shape=point,width=0.2];
-      right_left_ -> right_:left;
-      right_right_ -> right_:right;
-    }
-}
-#+End_SRC
-
-#+CAPTION: 50
-#+RESULTS:
-[[file:images/balanceL-5a.png]]
-
-and for the second branch ~2*ll.size <= lr.size~
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-5b.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=record, label="<left> | <y> lx | <right>"];
-      right [shape=point,width=0.2];
-      left -> y [style=invis];
-      right -> y [style=invis];
-      left_left [shape=diamond,label="ll"];
-      left_right [shape=record, label="<left> | <y> lrx | <right>", penwidth=3];
-      left_left -> left:left;
-      left_right -> left:right;
-      left_right_left [label="lrl",shape=diamond];
-      left_right_right [label="lrr",shape=diamond];
-      left_right_left -> left_right:left;
-      left_right_right -> left_right:right;
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-    hack_3 [style=invis];
-    hack_3 -> hack_2 [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record,label="<left> | <y> lrx | <right>"];
-      left_ [shape=record,label="<left> | <y> lx | <right>"];
-      right_ [shape=record,label="<left> | <y> y | <right>"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-
-      left_left_ [shape=diamond,label="ll"];
-      left_right_ [shape=diamond,label="lrl"];
-      left_left_ -> left_:left;
-      left_right_ -> left_:right;
-
-      right_left_ [shape=diamond,label="lrr"];
-      right_right_ [shape=point,width=0.2];
-      right_left_ -> right_:left;
-      right_right_ -> right_:right;
-    }
-}
-#+End_SRC
-
-#+CAPTION: 75
-#+RESULTS:
-[[file:images/balanceL-5b.png]]
-
-The sixth scenario introduces a tree on the =right=. When the =left= is empty we
-create the obvious connection. This scenario never arises from =.insert= because
-the =left= is always non-empty:
-
-#+BEGIN_SRC scala
-case (Tip(), r) => Bin(y, Tip(), r)
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-6.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=point,width=0.2];
-      right [shape=diamond,label="r"];
-      left -> y [style=invis];
-      right -> y [style=invis];
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record, label="<left> | <y> y | <right>"];
-      left_ [shape=point,width=0.2];
-      right_ [shape=diamond,label="r"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-    }
-}
-#+END_SRC
-
-#+CAPTION: 50
-#+RESULTS:
-[[file:images/balanceL-6.png]]
-
-The final scenario is when we have non-empty trees on both sides. Unless the
-=left= is three times or more the size of the =right=, we can do the simple
-thing and create a new =Bin=
-
-#+BEGIN_SRC scala
-case _ if l.size <= 3 * r.size => Bin(y, l, r)
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-7a.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=diamond,label="l"];
-      right [shape=diamond,label="r",penwidth=3];
-      left -> y [style=invis];
-      right -> y [style=invis];
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record, label="<left> | <y> y | <right>"];
-      left_ [shape=diamond,label="l"];
-      right_ [shape=diamond,label="r"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-    }
-}
-#+END_SRC
-
-#+CAPTION: 50
-#+RESULTS:
-[[file:images/balanceL-7a.png]]
-
-However, should the =left= be more than three times the size of the =right=, we
-must balance based on the relative sizes of =ll= and =lr=, like in scenario
-five.
-
-#+BEGIN_SRC scala
-case (Bin(lx, ll, lr), r) if (2*ll.size > lr.size) =>
-  Bin(lx, ll, Bin(y, lr, r))
-case (Bin(lx, ll, Bin(lrx, lrl, lrr)), r) =>
-  Bin(lrx, Bin(lx, ll, lrl), Bin(y, lrr, r))
-#+END_SRC
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-7b.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=record, label="<left> | <y> lx | <right>"];
-      right [shape=diamond,label="r"];
-      left -> y [style=invis];
-      right -> y [style=invis];
-      left_left [shape=diamond,label="ll",penwidth=3];
-      left_right [shape=diamond, label="lr"];
-      left_left -> left:left;
-      left_right -> left:right;
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-    hack_3 [style=invis];
-    hack_3 -> hack_2 [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record,label="<left> | <y> lx | <right>"];
-      left_ [shape=diamond,label="ll"];
-      right_ [shape=record,label="<left> | <y> y | <right>"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-
-      right_left_ [shape=diamond,label="lr"];
-      right_right_ [shape=diamond,label="r"];
-      right_left_ -> right_:left;
-      right_right_ -> right_:right;
-    }
-}
-#+End_SRC
-
-#+CAPTION: 60
-#+RESULTS:
-[[file:images/balanceL-7b.png]]
-
-#+BEGIN_SRC dot :cmd dot :file images/balanceL-7c.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT,nodesep=1];
-    node [fontname=Hack];
-    compound=true;
-
-    subgraph case {
-      y [label="y",color=white];
-      left [shape=record, label="<left> | <y> lx | <right>"];
-      right [shape=diamond,label="r"];
-      left -> y [style=invis];
-      right -> y [style=invis];
-      left_left [shape=diamond,label="ll"];
-      left_right [shape=record, label="<left> | <y> lrx | <right>",penwidth=3];
-      left_left -> left:left;
-      left_right -> left:right;
-      left_right_left [label="lrl",shape=diamond];
-      left_right_right [label="lrr",shape=diamond];
-      left_right_left -> left_right:left;
-      left_right_right -> left_right:right;
-    }
-
-    goes_to [shape=rarrow,label="",color=lightgray];
-    hack_2 [style=invis];
-    hack_2 -> goes_to [style=invis];
-    hack_3 [style=invis];
-    hack_3 -> hack_2 [style=invis];
-
-    subgraph case_ {
-      y_ [shape=record,label="<left> | <y> lrx | <right>"];
-      left_ [shape=record,label="<left> | <y> lx | <right>"];
-      right_ [shape=record,label="<left> | <y> y | <right>"];
-      left_ -> y_:left;
-      right_ -> y_:right;
-
-      left_left_ [shape=diamond,label="ll"];
-      left_right_ [shape=diamond,label="lrl"];
-      left_left_ -> left_:left;
-      left_right_ -> left_:right;
-
-      right_left_ [shape=diamond,label="lrr"];
-      right_right_ [shape=diamond,label="r"];
-      right_left_ -> right_:left;
-      right_right_ -> right_:right;
-    }
-}
-#+End_SRC
-
-#+CAPTION: 75
-#+RESULTS:
-[[file:images/balanceL-7c.png]]
-
-This concludes our study of the =.insert= method and how the =ISet= is
-constructed. It should be of no surprise that =Foldable= is implemented in terms
-of depth-first search along the =left= or =right=, as appropriate. Methods such
-as =.minimum= and =.maximum= are optimal because the data structure already
-encodes the ordering.
-
-It is worth noting that some typeclass methods /cannot/ be implemented as
-efficiently as we would like. Consider the signature of =Foldable.element=
-
-#+BEGIN_SRC scala
-@typeclass trait Foldable[F[_]] {
-  ...
-  def element[A: Equal](fa: F[A], a: A): Boolean
-  ...
-}
-#+END_SRC
-
-The obvious implementation for =.element= is to defer to (almost) binary-search
-=ISet.contains=. However, it is not possible because =.element= provides =Equal=
-whereas =.contains= requires =Order=.
-
-# http://okmij.org/ftp/Haskell/types.html#restricted-datatypes
-# https://github.com/scalaz/scalaz/pull/1576
-
-=ISet= is unable to provide a =Functor= for the same reason. In practice this
-turns out to be a sensible constraint: performing a =.map= would involve
-rebuilding the entire structure. It is sensible to convert to some other
-datatype, such as =IList=, perform the =.map=, and convert back. A consequence
-is that it is not possible to have =Traverse[ISet]= or =Applicative[ISet]=.
-
-**** =IMap=
-
-#+BEGIN_SRC scala
-sealed abstract class ==>>[A, B] {
-  val size: Int = this match {
-    case Tip()           => 0
-    case Bin(_, _, l, r) => 1 + l.size + r.size
-  }
-}
-object ==>> {
-  type IMap[A, B] = A ==>> B
-
-  private final case class Tip[A, B]() extends (A ==>> B)
-  private final case class Bin[A, B](
-    key: A,
-    value: B,
-    left: A ==>> B,
-    right: A ==>> B
-  ) extends ==>>[A, B]
-
-  def apply[A: Order, B](x: (A, B)*): A ==>> B = ...
-
-  def empty[A, B]: A ==>> B = Tip[A, B]()
-  def singleton[A, B](k: A, x: B): A ==>> B = Bin(k, x, Tip(), Tip())
-  def fromFoldable[F[_]: Foldable, A: Order, B](fa: F[(A, B)]): A ==>> B = ...
-  ...
-}
-#+END_SRC
-
-This is very familiar! Indeed, =IMap= (an alias to the lightspeed operator
-~==>>~) is another size-balanced tree, but with an extra =value: B= field in
-each binary branch, allowing it to store key/value pairs. Only the key type =A=
-needs an =Order= and a suite of convenient methods are provided to allow easy
-entry updating
-
-#+BEGIN_SRC scala
-sealed abstract class ==>>[A, B] {
-  ...
-  def adjust(k: A, f: B => B)(implicit o: Order[A]): A ==>> B = ...
-  def adjustWithKey(k: A, f: (A, B) => B)(implicit o: Order[A]): A ==>> B = ...
-  ...
-}
-#+END_SRC
-
-**** =StrictTree= and =Tree=
-
-Both =StrictTree= and =Tree= are implementations of a /Rose Tree/, a tree
-structure with an unbounded number of branches in every node (unfortunately
-built from standard library collections for legacy reasons):
-
-#+BEGIN_SRC scala
-case class StrictTree[A](
-  rootLabel: A,
-  subForest: Vector[StrictTree[A]]
-)
-#+END_SRC
-
-=Tree= is a /by-need/ version of =StrictTree= with convenient constructors
-
-#+BEGIN_SRC scala
-class Tree[A](
-  rootc: Need[A],
-  forestc: Need[Stream[Tree[A]]]
-) {
-  def rootLabel = rootc.value
-  def subForest = forestc.value
-}
-object Tree {
-  object Node {
-    def apply[A](root: =>A, forest: =>Stream[Tree[A]]): Tree[A] = ...
-  }
-  object Leaf {
-    def apply[A](root: =>A): Tree[A] = ...
-  }
-}
-#+END_SRC
-
-The user of a Rose Tree is expected to manually balance it, which makes it
-suitable for cases where it is useful to encode domain knowledge of a hierarchy
-into the data structure. For example, in artificial intelligence, a Rose Tree
-can be used in [[https://arxiv.org/abs/1203.3468][clustering algorithms]] to organise data into a hierarchy of
-increasingly similar things. It is possible to represent XML documents with a
-Rose Tree.
-
-When working with hierarchical data, consider using a Rose Tree instead of
-rolling a custom data structure.
-
-**** =FingerTree=
-
-# http://www.staff.city.ac.uk/~ross/papers/FingerTree.html
-# https://github.com/scalaz/scalaz/issues/1609
-
-Finger trees are generalised sequences with amortised constant cost lookup and
-logarithmic concatenation. =A= is the type of data, ignore =V= for now:
-
-#+BEGIN_SRC scala
-sealed abstract class FingerTree[V, A] {
-  def +:(a: A): FingerTree[V, A] = ...
-  def :+(a: =>A): FingerTree[V, A] = ...
-  def <++>(right: =>FingerTree[V, A]): FingerTree[V, A] = ...
-  ...
-}
-object FingerTree {
-  private class Empty[V, A]() extends FingerTree[V, A]
-  private class Single[V, A](v: V, a: =>A) extends FingerTree[V, A]
-  private class Deep[V, A](
-    v: V,
-    left: Finger[V, A],
-    spine: =>FingerTree[V, Node[V, A]],
-    right: Finger[V, A]
-  ) extends FingerTree[V, A]
-
-  sealed abstract class Finger[V, A]
-  final case class One[V, A](v: V, a1: A) extends Finger[V, A]
-  final case class Two[V, A](v: V, a1: A, a2: A) extends Finger[V, A]
-  final case class Three[V, A](v: V, a1: A, a2: A, a3: A) extends Finger[V, A]
-  final case class Four[V, A](v: V, a1: A, a2: A, a3: A, a4: A) extends Finger[V, A]
-
-  sealed abstract class Node[V, A]
-  private class Node2[V, A](v: V, a1: =>A, a2: =>A) extends Node[V, A]
-  private class Node3[V, A](v: V, a1: =>A, a2: =>A, a3: =>A) extends Node[V, A]
-  ...
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-~<++>~ is the TIE Bomber. Admittedly, sending in the proton torpedoes is a bit
-of an overreaction: it is the same thing as the regular =Monoid= TIE Fighter
-=|+|=.
-#+END_ASIDE
-
-Visualising =FingerTree= as dots, =Finger= as boxes and =Node= as boxes within
-boxes:
-
-#+BEGIN_SRC dot :cmd dot :file images/fingertree.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT];
-    node [fontname=Hack];
-
-    // Deep[V, A]
-    deep1 [shape=circle,label="",style=filled,width=0.1,color=black];
-
-    // Two[V, A]
-    ab [shape=record, label="<a> a | <b> b"];
-    ab -> deep1 [dir=none];
-
-    // Node2[V, A]
-    node1 [shape=record,label=<
-<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-  <TR><TD>c</TD><TD>d</TD></TR>
-</TABLE> |
-<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-  <TR><TD>e</TD></TR>
-</TABLE>
->]
-
-    // Deep[V, Node[A]]
-    deep2 [shape=doublecircle,label="",style=filled,width=0.1,color=black];
-    node1 -> deep2 [dir=none];
-
-    deep3 [shape=doublecircle,label="",style=filled,width=0.1,color=black];
-    deep3 -> deep2 -> deep1 [dir=none];
-
-    single [shape=record,width=0.1,label=<
-<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-  <TR><TD>f</TD></TR>
-</TABLE>
->]
-    single -> deep3 [dir=none];
-
-    node2 [shape=record,label=<
-<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-  <TR><TD>g</TD><TD>h</TD></TR>
-</TABLE> |
-<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-  <TR><TD>i</TD><TD>j</TD></TR>
-</TABLE>
->]
-
-    node2 -> deep2 [dir=none];
-
-    klm [shape=record, label="<k> k| <l> l | <m> m"];
-    klm -> deep1 [dir=none];
-}
-#+End_SRC
-
-#+CAPTION: 35
-#+RESULTS:
-[[file:images/fingertree.png]]
-
-Adding elements to the front of a =FingerTree= with =+:= is efficient because
-=Deep= simply adds the new element to its =left= finger. If the finger is a
-=Four=, we rebuild the =spine= to take 3 of the elements as a =Node3=. Adding to
-the end, =:+=, is the same but in reverse.
-
-Appending =|+|= (also =<++>=) is more efficient than adding one element at a
-time because the case of two =Deep= trees can retain the outer branches,
-rebuilding the spine based on the 16 possible combinations of the two =Finger=
-values in the middle.
-
-In the above we skipped over =V=. Not shown in the ADT description is an
-=implicit measurer: Reducer[A, V]= on every element of the ADT.
-
-#+BEGIN_ASIDE
-Storing typeclass instances on the ADT is considered bad style and also
-increases the memory requirement by 64 bits for every entry. The implementation
-of =FingerTree= is almost a decade old and is due a rewrite.
-#+END_ASIDE
-
-=Reducer= is an extension of =Monoid= that allows for single elements to be
-added to an =M=
-
-#+BEGIN_SRC scala
-class Reducer[C, M: Monoid] {
-  def unit(c: C): M
-
-  def snoc(m: M, c: C): M = append(m, unit(c))
-  def cons(c: C, m: M): M = append(unit(c), m)
-}
-#+END_SRC
-
-For example, =Reducer[A, IList[A]]= can provide an efficient =.cons=
-
-#+BEGIN_SRC scala
-implicit def reducer[A]: Reducer[A, IList[A]] = new Reducer[A, IList[A]] {
-  override def unit(a: A): IList[A] = IList.single(a)
-  override def cons(a: A, as: IList[A]): IList[A] = a :: as
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-=Reducer= should have been called =CanActuallyBuildFrom=, in honour of the
-similarly named stdlib =class=, since it is effectively a collection builder.
-#+END_ASIDE
-
-***** =IndSeq=
-
-If we use =Int= as =V=, we can get an indexed sequence, where the measure is
-/size/, allowing us to perform index-based lookup by comparing the desired index
-with the size at each branch in the structure:
-
-#+BEGIN_SRC scala
-final class IndSeq[A](val self: FingerTree[Int, A])
-object IndSeq {
-  private implicit def sizer[A]: Reducer[A, Int] = _ => 1
-  def apply[A](as: A*): IndSeq[A] = ...
-}
-#+END_SRC
-
-Another use of =FingerTree= is as an ordered sequence, where the measure stores
-the largest value contained by each branch:
-
-***** =OrdSeq=
-
-#+BEGIN_SRC scala
-final class OrdSeq[A: Order](val self: FingerTree[LastOption[A], A]) {
-  def partition(a: A): (OrdSeq[A], OrdSeq[A]) = ...
-  def insert(a: A): OrdSeq[A] = ...
-  def ++(xs: OrdSeq[A]): OrdSeq[A] = ...
-}
-object OrdSeq {
-  private implicit def keyer[A]: Reducer[A, LastOption[A]] = a => Tag(Some(a))
-  def apply[A: Order](as: A*): OrdSeq[A] = ...
-}
-#+END_SRC
-
-=OrdSeq= has no typeclass instances so it is only useful for incrementally
-building up an ordered sequence, with duplicates. We can access the underlying
-=FingerTree= when needed.
-
-***** =Cord=
-
-The most common use of =FingerTree= is as an intermediate holder for =String=
-representations in =Show=. Building a single =String= can be thousands of times
-faster than the default =case class= implementation of nested =.toString=, which
-builds a =String= for every layer in the ADT.
-
-#+BEGIN_SRC scala
-final case class Cord(self: FingerTree[Int, String]) {
-  override def toString: String = {
-    val sb = new java.lang.StringBuilder(self.measure)
-    self.foreach(sb.append) // locally scoped side effect
-    sb.toString
-  }
-  ...
-}
-#+END_SRC
-
-For example, the =Cord[String]= instance returns a =Three= with the string in
-the middle and quotes on either side
-
-#+BEGIN_SRC scala
-implicit val show: Show[String] = s => Cord(FingerTree.Three("\"", s, "\""))
-#+END_SRC
-
-Therefore a =String= renders as it is written in source code
-
-#+BEGIN_SRC scala
-scala> val s = "foo"
-       s.toString
-res: String = foo
-
-scala> s.show
-res: Cord = "foo"
-#+END_SRC
-
-#+BEGIN_ASIDE
-The =Cord= in Scalaz 7.2 is unfortunately not as efficient as it could be. This
-has been fixed in Scalaz 7.3 by a [[https://github.com/scalaz/scalaz/pull/1793][custom data structure optimised for =String=
-concatenation]].
-#+END_ASIDE
-
-**** =Heap= Priority Queue
-
-A /priority queue/ is a data structure that allows fast insertion of ordered
-elements, allowing duplicates, with fast access to the /minimum/ value (highest
-priority). The structure is not required to store the non-minimal elements in
-order. A naive implementation of a priority queue could be
-
-#+BEGIN_SRC scala
-final case class Vip[A] private (val peek: Maybe[A], xs: IList[A]) {
-  def push(a: A)(implicit O: Order[A]): Vip[A] = peek match {
-    case Maybe.Just(min) if a < min => Vip(a.just, min :: xs)
-    case _                          => Vip(peek, a :: xs)
-  }
-
-  def pop(implicit O: Order[A]): Maybe[(A, Vip[A])] = peek strengthR reorder
-  private def reorder(implicit O: Order[A]): Vip[A] = xs.sorted match {
-    case INil()           => Vip(Maybe.empty, IList.empty)
-    case ICons(min, rest) => Vip(min.just, rest)
-  }
-}
-object Vip {
-  def fromList[A: Order](xs: IList[A]): Vip[A] = Vip(Maybe.empty, xs).reorder
-}
-#+END_SRC
-
-This =push= is a very fast =O(1)=, but =reorder= (and therefore =pop=) relies on
-=IList.sorted= costing =O(n log n)=.
-
-# http://www.brics.dk/RS/96/37/BRICS-RS-96-37.pdf
-
-Scalaz encodes a priority queue with a tree structure where every node has a
-value less than its children. =Heap= has fast push (=insert=), =union=, =size=,
-pop (=uncons=) and peek (=minimumO=) operations:
-
-#+BEGIN_SRC scala
-sealed abstract class Heap[A] {
-  def insert(a: A)(implicit O: Order[A]): Heap[A] = ...
-  def +(a: A)(implicit O: Order[A]): Heap[A] = insert(a)
-
-  def union(as: Heap[A])(implicit O: Order[A]): Heap[A] = ...
-
-  def uncons(implicit O: Order[A]): Option[(A, Heap[A])] = minimumO strengthR deleteMin
-  def minimumO: Option[A] = ...
-  def deleteMin(implicit O: Order[A]): Heap[A] = ...
-
-  ...
-}
-object Heap {
-  def fromData[F[_]: Foldable, A: Order](as: F[A]): Heap[A] = ...
-
-  private final case class Ranked[A](rank: Int, value: A)
-
-  private final case class Empty[A]() extends Heap[A]
-  private final case class NonEmpty[A](
-    size: Int,
-    tree: Tree[Ranked[A]]
-  ) extends Heap[A]
-
-  ...
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-=size= is memoized in the ADT to enable instant calculation of
-=Foldable.length=, at a cost of 64 bits per entry. A variant of =Heap= could be
-created with a smaller footprint, but slower =Foldable.length=.
-#+END_ASIDE
-
-=Heap= is implemented with a Rose =Tree= of =Ranked= values, where the =rank= is
-the depth of a subtree, allowing us to depth-balance the tree. We manually
-maintain the tree so the =minimum= value is at the top. An advantage of encoding
-the minimum value in the data structure is that =minimumO= (also known as
-/peek/) is a free lookup:
-
-#+BEGIN_SRC scala
-  def minimumO: Option[A] = this match {
-    case Empty()                        => None
-    case NonEmpty(_, Tree.Node(min, _)) => Some(min.value)
-  }
-#+END_SRC
-
-When inserting a new entry, we compare to the current minimum and replace if the
-new entry is lower:
-
-#+BEGIN_SRC scala
-  def insert(a: A)(implicit O: Order[A]): Heap[A] = this match {
-    case Empty() =>
-      NonEmpty(1, Tree.Leaf(Ranked(0, a)))
-    case NonEmpty(size, tree @ Tree.Node(min, _)) if a <= min.value =>
-      NonEmpty(size + 1, Tree.Node(Ranked(0, a), Stream(tree)))
-  ...
-#+END_SRC
-
-Insertions of non-minimal values result in an /unordered/ structure in the
-branches of the minimum. When we encounter two or more subtrees of equal rank,
-we optimistically put the minimum to the front:
-
-#+BEGIN_SRC scala
-  ...
-    case NonEmpty(size, Tree.Node(min,
-           (t1 @ Tree.Node(Ranked(r1, x1), xs1)) #::
-           (t2 @ Tree.Node(Ranked(r2, x2), xs2)) #:: ts)) if r1 == r2 =>
-      lazy val t0 = Tree.Leaf(Ranked(0, a))
-      val sub =
-        if (x1 <= a && x1 <= x2)
-          Tree.Node(Ranked(r1 + 1, x1), t0 #:: t2 #:: xs1)
-        else if (x2 <= a && x2 <= x1)
-          Tree.Node(Ranked(r2 + 1, x2), t0 #:: t1 #:: xs2)
-        else
-          Tree.Node(Ranked(r1 + 1, a), t1 #:: t2 #:: Stream())
-
-      NonEmpty(size + 1, Tree.Node(Ranked(0, min.value), sub #:: ts))
-
-    case NonEmpty(size,  Tree.Node(min, rest)) =>
-      val t0 = Tree.Leaf(Ranked(0, a))
-      NonEmpty(size + 1, Tree.Node(Ranked(0, min.value), t0 #:: rest))
-  }
-#+END_SRC
-
-Avoiding a full ordering of the tree makes =insert= very fast, =O(1)=, such that
-producers adding to the queue are not penalised. However, the consumer pays the
-cost when calling =uncons=, with =deleteMin= costing =O(log n)= because it must
-search for the minimum value, and remove it from the tree by rebuilding. That Is
-fast when compared to the naive implementation.
-
-The =union= operation also delays ordering allowing it to be =O(1)=.
-
-If the =Order[Foo]= does not correctly capture the priority we want for the
-=Heap[Foo]=, we can use =Tag= and provide a custom =Order[Foo @@ Custom]= for a
-=Heap[Foo @@ Custom]=.
-
-**** =Diev= (Discrete Intervals)
-
-# http://web.engr.oregonstate.edu/~erwig/papers/Diet_JFP98.pdf
-
-We can efficiently encode the (unordered) integer values 6, 9, 2, 13, 8, 14, 10,
-7, 5 as inclusive intervals =[2, 2], [5, 10], [13, 14]=. =Diev= is an efficient
-encoding of /intervals/ for elements =A= that have an =Enum[A]=, getting more
-efficient as the contents become denser.
-
-#+BEGIN_SRC scala
-sealed abstract class Diev[A] {
-  def +(interval: (A, A)): Diev[A]
-  def +(value: A): Diev[A]
-  def ++(other: Diev[A]): Diev[A]
-
-  def -(interval: (A, A)): Diev[A]
-  def -(value: A): Diev[A]
-  def --(other: Diev[A]): Diev[A]
-
-  def intervals: Vector[(A, A)]
-  def contains(value: A): Boolean
-  def contains(interval: (A, A)): Boolean
-  ...
-}
-object Diev {
-  private final case class DieVector[A: Enum](
-    intervals: Vector[(A, A)]
-  ) extends Diev[A]
-
-  def empty[A: Enum]: Diev[A] = ...
-  def fromValuesSeq[A: Enum](values: Seq[A]): Diev[A] = ...
-  def fromIntervalsSeq[A: Enum](intervals: Seq[(A, A)]): Diev[A] = ...
-}
-#+END_SRC
-
-When updating the =Diev=, adjacent intervals are merged (and then ordered) such
-that there is a unique representation for a given set of values.
-
-#+BEGIN_SRC scala
-scala> Diev.fromValuesSeq(List(6, 9, 2, 13, 8, 14, 10, 7, 5))
-res: Diev[Int] = ((2,2)(5,10)(13,14))
-
-scala> Diev.fromValuesSeq(List(6, 9, 2, 13, 8, 14, 10, 7, 5).reverse)
-res: Diev[Int] = ((2,2)(5,10)(13,14))
-#+END_SRC
-
-A great usecase for =Diev= is for storing time periods. For example, in our
-=TradeTemplate= from the previous chapter
-
-#+BEGIN_SRC scala
-final case class TradeTemplate(
-  payments: List[java.time.LocalDate],
-  ccy: Option[Currency],
-  otc: Option[Boolean]
-)
-#+END_SRC
-
-if we find that the =payments= are very dense, we may wish to swap to a =Diev=
-representation for performance reasons, without any change in our business logic
-because we used =Monoid=, not any =List= specific methods. We would, however,
-have to provide an =Enum[LocalDate]=, which is an otherwise useful thing to
-have.
+=Chain= has a =Monad= and also has a =NonEmptyChain= variant.
+
+The user of =Chain= is expected to manually /balance/ it because two =Chain= may
+contain the same values but be represented different ways, and therefore have
+different performance characteristics. For example, if we construct a =Chain=
+entirely out of =Singleton= by using =.prepend= and =.append= then our =Chain=
+will have more /links/ in it but if we use =.concat= and =Chain.fromSeq= where
+possible then we will have less links per datum.
+
+The ability to control the shape of the =Chain= makes it suitable for cases
+where it is useful to encode domain knowledge of a hierarchy into the data
+structure. For example, in artificial intelligence, a =Chain= can be used in
+[[https://arxiv.org/abs/1203.3468][clustering algorithms]] to organise data into a hierarchy of increasingly similar
+things. It is possible to represent XML documents with a =Chain=.
+
+When working with hierarchical data, consider using a =Chain= instead of rolling
+a custom data structure.
+
+=Chain= is also useful if we wish to build a regular data structure such as
+=Vector= but the performance cost of appending =Vector= at every level is too
+high. Constructing the =Vector= by first creating a =Chain= will cost =O(N)= and
+thereafter the lookup cost is =O(1)=.
 
 **** =OneAnd=
 
-Recall that =Foldable= is the Scalaz equivalent of a collections API and
-=Foldable1= is for non-empty collections. So far we have only seen
-=NonEmptyList= to provide a =Foldable1=. The simple data structure =OneAnd=
-wraps any other collection to turn it into a =Foldable1=:
+Recall that =Foldable= is the Cats equivalent of a collections API and
+=Reducible= is for non-empty collections. We have already seen =NonEmptyList=
+and =NonEmptyChain= which provide =Reducible=, there is also =NonEmptySet=,
+=NonEmptyMap= and =NonEmptyVector= which wrap the standard library collections.
+The simple data structure =OneAnd= wraps any other collection to turn it into a
+=Reducible=:
 
 #+BEGIN_SRC scala
 final case class OneAnd[F[_], A](head: A, tail: F[A])
 #+END_SRC
 
-=NonEmptyList[A]= could be an alias to =OneAnd[IList, A]=. Similarly, we can
-create non-empty =Stream=, =DList= and =Tree= structures. However it may break
-ordering and uniqueness characteristics of the underlying structure: a
-=OneAnd[ISet, A]= is not a non-empty =ISet=, it is an =ISet= with a guaranteed
-first element that may also be in the =ISet=.
+=NonEmptyList[A]= could be an alias to =OneAnd[List, A]=. Similarly, we can
+create non-empty =Stream=. However it may break ordering and uniqueness
+characteristics of the underlying structure: a =OneAnd[Set, A]= is not a
+non-empty =Set=, it is a =Set= with a guaranteed first element that may also be
+in the =Set=.
 
 *** Summary
 
-In this chapter we have skimmed over the data types that Scalaz has to offer.
+In this chapter we have skimmed over the data types that Cats has to offer.
 
 It is not necessary to remember everything from this chapter: think of each
 section as having planted the kernel of an idea.
@@ -7722,19 +6076,22 @@ section as having planted the kernel of an idea.
 The world of functional data structures is an active area of research. Academic
 publications appear regularly with new approaches to old problems. Implementing
 a functional data structure from the literature is a good contribution to the
-Scalaz ecosystem.
+Cats ecosystem.
 
-** Advanced Monads
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
-You have to know things like Advanced Monads in order to be an advanced
-functional programmer.
-
-However, we are developers yearning for a simple life, and our idea of
-"advanced" is modest. To put it into context: =scala.concurrent.Future= is more
-complicated and nuanced than any =Monad= in this chapter.
+** Cats Monads
 
 In this chapter we will study some of the most important implementations of
-=Monad=.
+=Monad= and in particular those that are provided by the =cats-mtl= library
+which can be installed with
+
+#+BEGIN_SRC scala
+libraryDependencies += "org.typelevel" %% "cats-mtl-core" % "0.7.1"
+#+END_SRC
 
 *** Always in motion is the =Future=
 
@@ -10379,7 +8736,7 @@ without being tied to the =IO= implementations.
 
 **** =FreeAp= (=Applicative=)
 
-Despite this chapter being called *Advanced Monads*, the takeaway is: /we
+Despite this chapter being called *Cats Monads*, the takeaway is: /we
 shouldn't use monads unless we really *really* have to/. In this section, we
 will see why =FreeAp= (free applicative) is preferable to =Free= monads.
 
