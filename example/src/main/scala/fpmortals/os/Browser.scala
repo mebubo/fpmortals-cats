@@ -4,11 +4,13 @@
 package fpmortals
 package os
 
-import prelude._
+import cats._, implicits._
+import cats.effect.IO
 
 import java.awt.Desktop
 import scala.sys.process._
 
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 
 /**
@@ -18,12 +20,12 @@ import eu.timepit.refined.string.Url
  */
 object Browser {
 
-  def open(url: String Refined Url): Task[Unit] =
-    Task(Desktop.getDesktop().browse(new java.net.URI(url.value))).orElse(
-      Task {
+  def open(url: String Refined Url): IO[Unit] =
+    IO(Desktop.getDesktop().browse(new java.net.URI(url.value))).orElse(
+      IO {
         // we could use BrowserLauncher2 for that true retro feel...
-        if (str"xdg-open ${url.value}".! != 0)
-          throw new java.lang.IllegalStateException("non-compliant browser") // scalafix:ok
+        if (s"xdg-open ${url.value}".! != 0)
+          throw new java.lang.IllegalStateException("non-compliant browser")
       }
     )
 

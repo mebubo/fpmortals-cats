@@ -13,7 +13,6 @@ import eu.timepit.refined.string.Url
 
 import UrlEncodedWriter.ops._
 
-@deriving(UrlEncodedWriter, UrlQueryWriter)
 final case class Foo(apple: String, bananas: Long, pears: String)
 
 class UrlEncodedWriterSpec extends Test {

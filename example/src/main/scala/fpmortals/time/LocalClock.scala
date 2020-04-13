@@ -4,13 +4,13 @@
 package fpmortals
 package time
 
-import prelude._
+import cats._, implicits._
+import cats.effect.IO
 
 trait LocalClock[F[_]] {
   def now: F[Epoch]
 }
-object LocalClock extends LocalClockBoilerplate
 
-final class LocalClockTask extends LocalClock[Task] {
-  def now: Task[Epoch] = Epoch.now.widenError
+final class LocalClockTask extends LocalClock[IO] {
+  def now: IO[Epoch] = Epoch.now
 }

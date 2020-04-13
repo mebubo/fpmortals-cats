@@ -55,8 +55,8 @@ final class BlazeUserInteraction private (
   def open(url: String Refined Url): Task[Unit] = Browser.open(url)
 
   private def mkUrl(s: Server[Task]): String Refined Url = {
-    val port = s.address.getPort // scalafix:ok
-    Refined.unsafeApply(str"http://localhost:${port.toString}/") // scalafix:ok
+    val port = s.address.getPort
+    Refined.unsafeApply(str"http://localhost:${port.toString}/")
   }
 
 }

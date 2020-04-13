@@ -6,8 +6,9 @@ package http
 package oauth2
 package api
 
-import prelude._
+import cats._, implicits._
 
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 import jsonformat._
 
@@ -112,7 +113,6 @@ import http.encoding._
  * app.
  */
 
-@deriving(UrlQueryWriter)
 final case class AuthRequest(
   redirect_uri: String Refined Url,
   scope: String,
@@ -121,10 +121,13 @@ final case class AuthRequest(
   response_type: String = "code",
   access_type: String = "offline"
 )
+object AuthRequest {
+  implicit val urlQueryWriter: UrlQueryWriter[AuthRequest] = DerivedUrlQueryWriter.gen
+}
+
 // AuthResponse is to send the user's browser to redirect_uri with a
 // `code` param (yup, seriously).
 
-@deriving(UrlEncodedWriter)
 final case class AccessRequest(
   code: String,
   redirect_uri: String Refined Url,
@@ -133,24 +136,35 @@ final case class AccessRequest(
   scope: String = "",
   grant_type: String = "authorization_code"
 )
-@deriving(JsDecoder)
+object AccessRequest {
+  implicit val urlEncodedWriter: UrlEncodedWriter[AccessRequest] = UrlEncodedWriterMagnolia.gen
+}
+
 final case class AccessResponse(
   access_token: String,
   token_type: String,
   expires_in: Long,
   refresh_token: String
 )
+object AccessResponse {
+  implicit val jsDecoder: JsDecoder[AccessResponse] = JsMagnoliaDecoder.gen
+}
 
-@deriving(UrlEncodedWriter)
 final case class RefreshRequest(
   client_secret: String,
   refresh_token: String,
   client_id: String,
   grant_type: String = "refresh_token"
 )
-@deriving(UrlEncodedWriter, JsDecoder)
+object RefreshRequest {
+  implicit val urlEncodedWriter: UrlEncodedWriter[RefreshRequest] = UrlEncodedWriterMagnolia.gen
+}
+
 final case class RefreshResponse(
   access_token: String,
   token_type: String,
   expires_in: Long
 )
+object RefreshResponse {
+  implicit val jsDecoder: JsDecoder[RefreshResponse] = JsMagnoliaDecoder.gen
+}

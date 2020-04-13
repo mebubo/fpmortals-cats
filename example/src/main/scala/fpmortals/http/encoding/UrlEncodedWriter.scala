@@ -4,11 +4,12 @@
 package fpmortals
 package http.encoding
 
-import prelude._, Z._, S._
+import cats._, implicits._
 import java.net.URLEncoder
 
 import magnolia._
 import simulacrum._
+import eu.timepit.refined.api.Refined
 
 /**
  * Converts entities into `application/x-www-form-urlencoded`
@@ -39,20 +40,20 @@ object UrlEncodedWriter extends UrlEncodedWriter1 {
   )
 
   implicit val string: UrlEncodedWriter[String] =
-    instance(s => Refined.unsafeApply(URLEncoder.encode(s, "UTF-8"))) // scalafix:ok
+    instance(s => Refined.unsafeApply(URLEncoder.encode(s, "UTF-8")))
   implicit val long: UrlEncodedWriter[Long] =
-    instance(s => Refined.unsafeApply(s.toString)) // scalafix:ok
+    instance(s => Refined.unsafeApply(s.toString))
 
-  implicit def ilist[K: UrlEncodedWriter, V: UrlEncodedWriter]
-    : UrlEncodedWriter[IList[(K, V)]] = instance { m =>
+  implicit def list[K: UrlEncodedWriter, V: UrlEncodedWriter]
+    : UrlEncodedWriter[List[(K, V)]] = instance { m =>
     val raw = m.map {
       case (k, v) => k.toUrlEncoded.value + "=" + v.toUrlEncoded.value
     }.intercalate("&")
     Refined.unsafeApply(raw) // by deduction
   }
 
-  implicit def imap[K: UrlEncodedWriter, V: UrlEncodedWriter]
-    : UrlEncodedWriter[K ==>> V] = ilist[K, V].contramap(_.toList.toIList)
+  implicit def dict[K: UrlEncodedWriter, V: UrlEncodedWriter]
+    : UrlEncodedWriter[Map[K, V]] = list[K, V].contramap(_.toList)
 
 }
 private[encoding] sealed abstract class UrlEncodedWriter1 {

@@ -4,7 +4,7 @@
 package fpmortals
 package http.encoding
 
-import prelude._
+import cats._, implicits._
 
 import java.net.URLDecoder
 
@@ -26,7 +26,7 @@ object DerivedUrlQueryWriter {
   }
 
   implicit val hnil: DerivedUrlQueryWriter[HNil] = { _ =>
-    UrlQuery(IList.empty)
+    UrlQuery(Nil)
   }
   implicit def hcons[Key <: Symbol, A, Remaining <: HList](
     implicit Key: Witness.Aux[Key],
@@ -40,7 +40,7 @@ object DerivedUrlQueryWriter {
         val decodedValue = URLDecoder.decode(
           LV.value.toUrlEncoded(head).value,
           "UTF-8"
-        ) // scalafix:ok
+        )
         decodedKey -> decodedValue
       }
 

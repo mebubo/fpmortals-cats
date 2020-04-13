@@ -5,10 +5,9 @@ package fpmortals
 package http
 package oauth2
 
-import prelude._, Z._
+import cats._, implicits._
 
-import pureconfig.orphans._
-
+import scala.concurrent.duration._
 import time._
 import http.JsonClient
 import api._
@@ -17,7 +16,6 @@ import api._
  * Refresh tokens do not expire, except in response to a security
  * breach or user / server whim.
  */
-@xderiving(Equal, Show, ConfigReader)
 final case class RefreshToken(token: String) extends AnyVal
 
 /**
@@ -46,7 +44,7 @@ final class AccessModule[F[_]: Monad](
       msg <- H.post[AccessRequest, AccessResponse](
               config.access,
               request,
-              IList.empty
+              Nil
             )
       time    <- T.now
       expires = time + msg.expires_in.seconds

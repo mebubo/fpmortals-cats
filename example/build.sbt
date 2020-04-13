@@ -18,6 +18,7 @@ libraryDependencies ++= Seq(
 
 val http4sVersion = "0.18.16"
 libraryDependencies ++= Seq(
+  "com.propensive"        %% "magnolia"            % "0.14.4",
   "com.chuusai"           %% "shapeless"           % "2.3.3",
   "com.lihaoyi"           %% "sourcecode"          % "0.1.4",
   "com.propensive"        %% "contextual"          % "1.1.0",
@@ -29,6 +30,7 @@ libraryDependencies ++= Seq(
 )
 
 addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.11.0" cross CrossVersion.full)
+addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.full)
 
 scalacOptions in (Compile, console) -= "-Xfatal-warnings"
 initialCommands in (Compile, console) := Seq(

@@ -4,9 +4,10 @@
 package fpmortals
 package http
 
-import prelude._
+import cats._, implicits._
 
 import jsonformat.JsDecoder
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 
 import http.encoding._
@@ -19,18 +20,18 @@ trait JsonClient[F[_]] {
 
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A]
 
   // using application/x-www-form-urlencoded
   def post[P: UrlEncodedWriter, A: JsDecoder](
     uri: String Refined Url,
     payload: P,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A]
 
 }
-object JsonClient extends JsonClientBoilerplate {
+object JsonClient {
   sealed abstract class Error
   final case class ServerError(status: Int)       extends Error
   final case class DecodingError(message: String) extends Error

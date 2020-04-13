@@ -4,8 +4,9 @@
 package fpmortals
 package http.oauth2
 
-import prelude._, Z._
+import cats._, implicits._
 
+import scala.concurrent.duration._
 import time._
 import http._
 
@@ -16,7 +17,6 @@ import api._
  * be expired on a whim by the server. For example, Google only allow
  * 50 tokens, per user.
  */
-@deriving(Equal, Show, ConfigReader)
 final case class BearerToken(token: String, expires: Epoch)
 
 trait Refresh[F[_]] {
@@ -39,7 +39,7 @@ final class RefreshModule[F[_]: Monad](
       msg <- H.post[RefreshRequest, RefreshResponse](
               config.refresh,
               request,
-              IList.empty
+              Nil
             )
       time    <- T.now
       expires = time + msg.expires_in.seconds

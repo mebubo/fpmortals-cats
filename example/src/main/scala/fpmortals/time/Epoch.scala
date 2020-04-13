@@ -3,16 +3,17 @@
 
 package fpmortals
 
-import prelude._, S._, Z._
+import cats._, implicits._
+import cats.effect.IO
 
 import java.time.Instant
 import java.lang.System
 
 import scala.{ Either, Left, Right, StringContext }
+import scala.concurrent.duration._
 import scala.util.control.NonFatal
 
 import contextual._
-import pureconfig.orphans._
 
 package object time {
   implicit class EpochMillisStringContext(sc: StringContext) {
@@ -22,27 +23,16 @@ package object time {
 }
 
 package time {
-  @xderiving(Order, Arbitrary)
   final case class Epoch(millis: Long) extends AnyVal {
     def +(d: FiniteDuration): Epoch = Epoch(millis + d.toMillis)
     def -(e: FiniteDuration): Epoch = Epoch(millis - e.toMillis)
     def -(e: Epoch): FiniteDuration = (millis - e.millis).millis
   }
   object Epoch {
-    def now: IO[Void, Epoch] =
-      IO.sync(Epoch(System.currentTimeMillis)) // scalafix:ok
+    def now: IO[Epoch] =
+      IO(Epoch(System.currentTimeMillis))
 
-    implicit val show: Show[Epoch] =
-      Show.shows(e => Instant.ofEpochMilli(e.millis).toString) // scalafix:ok
-
-    implicit val configReader: ConfigReader[Epoch] =
-      ConfigReader[String].emap(
-        s =>
-          EpochInterpolator.check(s) match {
-            case Left((_, err)) => failureReason(err)
-            case Right(success) => Right(success)
-          }
-      )
+    implicit val show: Show[Epoch] = e => Instant.ofEpochMilli(e.millis).toString
   }
 
   object EpochInterpolator extends Verifier[Epoch] {

@@ -5,9 +5,9 @@ package fpmortals
 package http
 package oauth2
 
-import prelude._, Z._
+import cats._, implicits._
 
-import pureconfig.orphans._
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 
 import api._
@@ -15,7 +15,6 @@ import encoding.UrlQuery.ops._
 import encoding.UrlQueryWriter.ops._
 
 /** Defines fixed information about a server's OAuth 2.0 service. */
-@deriving(ConfigReader)
 final case class ServerConfig(
   auth: String Refined Url,
   access: String Refined Url,
@@ -26,7 +25,6 @@ final case class ServerConfig(
 )
 
 /** Code tokens are one-shot and expire on use. */
-@deriving(Equal, Show)
 final case class CodeToken(
   token: String,
   // for some stupid reason, the protocol needs the exact same

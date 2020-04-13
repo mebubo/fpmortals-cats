@@ -4,7 +4,7 @@
 package fpmortals
 package http.encoding
 
-import prelude._
+import cats._, implicits._
 import java.util.regex.Pattern
 import eu.timepit.refined.api.Validate
 
@@ -19,11 +19,11 @@ sealed abstract class UrlEncoded
 object UrlEncoded {
   // WORKAROUND https://github.com/propensive/contextual/issues/21
   private[this] val valid: Pattern =
-    Pattern.compile("\\A(\\p{Alnum}++|[-.*_+=&]++|%\\p{XDigit}{2})*\\z") // scalafix:ok
+    Pattern.compile("\\A(\\p{Alnum}++|[-.*_+=&]++|%\\p{XDigit}{2})*\\z")
 
   implicit def urlValidate: Validate.Plain[String, UrlEncoded] =
     Validate.fromPredicate(
-      s => valid.matcher(s).find(), // scalafix:ok
+      s => valid.matcher(s).find(),
       identity,
       new UrlEncoded {}
     )

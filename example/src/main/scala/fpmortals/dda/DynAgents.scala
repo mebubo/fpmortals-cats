@@ -5,8 +5,9 @@ package fpmortals
 package dda
 package logic
 
-import prelude._, S._, Z._
+import cats._, data._, implicits._
 
+import scala.concurrent.duration._
 import algebra._
 import time.Epoch
 
@@ -25,13 +26,12 @@ import time.Epoch
  *             the nodes. Note that this is stale by definition, but
  *             there are best endeavours to refresh it regularly.
  */
-@deriving(Equal, Show)
 final case class WorldView(
   backlog: Int,
   agents: Int,
   managed: NonEmptyList[MachineNode],
-  alive: MachineNode ==>> Epoch,
-  pending: MachineNode ==>> Epoch,
+  alive: Map[MachineNode, Epoch],
+  pending: Map[MachineNode, Epoch],
   time: Epoch
 )
 
@@ -40,40 +40,37 @@ trait DynAgents[F[_]] {
   def update(old: WorldView): F[WorldView]
   def act(world: WorldView): F[WorldView]
 }
-object DynAgents extends DynAgentsBoilerplate
 
 final class DynAgentsModule[F[_]: Applicative](D: Drone[F], M: Machines[F])
     extends DynAgents[F] {
 
   def initial: F[WorldView] =
-    (D.getBacklog |@| D.getAgents |@| M.getManaged |@| M.getAlive |@| M.getTime) {
-      case (db, da, mm, ma, mt) => WorldView(db, da, mm, ma, IMap.empty, mt)
+    (D.getBacklog, D.getAgents, M.getManaged, M.getAlive, M.getTime).mapN {
+      case (db, da, mm, ma, mt) => WorldView(db, da, mm, ma, Map(), mt)
     }
 
   def update(old: WorldView): F[WorldView] =
     initial.map { snap =>
-      val changed = symdiff(old.alive, snap.alive)
-      val pending = (old.pending
-        .difference(changed))
-        .filterWithKey(
-          (_, started) => snap.time - started < 10.minutes
-        )
+      val changed = symdiff(old.alive.keySet, snap.alive.keySet)
+      val pending = (old.pending -- changed).filter {
+            case (_, started) => snap.time - started < 10.minutes
+          }
       snap.copy(pending = pending)
     }
 
-  private def symdiff[A: Order, B](a1: A ==>> B, a2: A ==>> B): A ==>> B =
-    a1.union(a2).difference(a1.intersection(a2))
+  private def symdiff[T](a: Set[T], b: Set[T]): Set[T] =
+    (a union b) -- (a intersect b)
 
   def act(world: WorldView): F[WorldView] = world match {
     case NeedsAgent(node) =>
-      M.start(node) >| world.copy(pending = IMap.singleton(node, world.time))
+      M.start(node) as world.copy(pending = Map(node -> world.time))
 
     case Stale(nodes) =>
       nodes.traverse { node =>
-        M.stop(node) >| node
+        M.stop(node) as node
       }.map { stopped =>
-        val updates = IMap.fromFoldable(stopped.strengthR(world.time))
-        world.copy(pending = world.pending.union(updates))
+        val updates = stopped.tupleRight(world.time).toList.toMap
+        world.copy(pending = world.pending ++ updates)
       }
 
     case _ => world.pure[F]
@@ -102,13 +99,13 @@ final class DynAgentsModule[F[_]: Applicative](D: Drone[F], M: Machines[F])
     def unapply(world: WorldView): Option[NonEmptyList[MachineNode]] =
       world match {
         case WorldView(backlog, _, _, alive, pending, time) if !alive.isEmpty =>
-          alive
-            .difference(pending)
-            .filterWithKey { (n, started) =>
+          (alive -- pending.keySet)
+            .filter { case (n, started) =>
               (backlog == 0 && (time - started).toMinutes % 60 >= 58) ||
               (time - started >= 5.hours)
             }
             .keys
+            .toList
             .toNel
 
         case _ => None

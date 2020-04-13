@@ -4,16 +4,16 @@
 package fpmortals
 package http.encoding
 
-import prelude._, Z._
+import cats._, implicits._
 
 import java.net.URI
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 
 /**
  * URL query key=value pairs, in unencoded form.
  */
-@xderiving(UrlEncodedWriter)
-final case class UrlQuery(params: IList[(String, String)]) extends AnyVal
+final case class UrlQuery(params: List[(String, String)]) extends AnyVal
 object UrlQuery {
   object ops {
     implicit class UrlOps(private val encoded: String Refined Url) {

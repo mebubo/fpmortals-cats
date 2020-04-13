@@ -30,7 +30,6 @@ object Data {
 import Data._
 
 // fully describes the world, as viewed by WorldView
-@deriving(Equal, Show)
 final case class World(
   backlog: Int,
   agents: Int,

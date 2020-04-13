@@ -25,7 +25,7 @@ abstract class Test extends FlatSpec with scalaz.ioeffect.RTS {
           _ => Option(msg),
           None,
           P
-        ) // scalafix:ok
+        )
       }
   }
 

@@ -56,7 +56,6 @@ object Batch {
 }
 
 object Monkeys {
-  @deriving(Equal, Show)
   final case class S(
     singles: IList[MachineNode],
     batches: IList[NonEmptyList[MachineNode]]
@@ -90,7 +89,7 @@ final class AlgebraSpec extends Test with RTS {
     val iM: Machines.Ast ~> Task      = Machines.interpreter(DummyMachines)
     val interpreter: Demo.Ast ~> Task = or(iM, iD)
 
-    var count = 0 // scalafix:ok
+    var count = 0
     val Monitor = λ[Demo.Ast ~> Demo.Ast](
       _.run match {
         case \/-(m @ Drone.GetBacklog()) =>
@@ -285,7 +284,7 @@ object Mocker {
       new (F ~> G) {
         override def apply[α](fa: F[α]): G[α] =
           // safe because F and G share a type parameter
-          pf.asInstanceOf[PartialFunction[F[α], G[α]]](fa) // scalafix:ok
+          pf.asInstanceOf[PartialFunction[F[α], G[α]]](fa)
       }
   }
   def stub[A]: Stub[A] = new Stub[A]
@@ -296,6 +295,6 @@ object Mocker {
     new (F ~> G) {
       override def apply[α](fa: F[α]): G[α] =
         // not even nearly safe, but we'll catch mistakes when the test runs
-        pf.asInstanceOf[PartialFunction[F[α], G[α]]](fa) // scalafix:ok
+        pf.asInstanceOf[PartialFunction[F[α], G[α]]](fa)
     }
 }
