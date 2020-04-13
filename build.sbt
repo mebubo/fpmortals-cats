@@ -13,9 +13,7 @@ libraryDependencies ++= Seq(
   "org.typelevel"        %% "cats-mtl-core"   % "0.7.1",
   "org.typelevel"        %% "cats-effect"     % "2.1.2",
   "org.typelevel"        %% "kittens"         % "2.0.0",
-  "eu.timepit"           %% "refined-cats"    % "0.9.13",
-  "com.chuusai"          %% "shapeless"       % "2.3.3",
-  "com.lihaoyi"          %% "sourcecode"      % "0.1.4"
+  "eu.timepit"           %% "refined-cats"    % "0.9.13"
 )
 
 addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.11.0" cross CrossVersion.full)

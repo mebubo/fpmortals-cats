@@ -1,0 +1,70 @@
+// Copyright: 2017 - 2018 Sam Halliday, 2020 Zara Turtle
+// License: https://firstdonoharm.dev/version/2/1/license.html
+
+package fpmortals
+package http
+package oauth2
+package interpreters
+
+import prelude._, T._, Z._
+
+import eu.timepit.refined.string.Url
+import org.http4s._
+import org.http4s.dsl._
+import org.http4s.server.Server
+import org.http4s.server.blaze._
+
+import fpmortals.os.Browser
+
+final class BlazeUserInteraction private (
+  pserver: Promise[Void, Server[Task]],
+  ptoken: Promise[Void, String]
+) extends UserInteraction[Task] {
+  private val dsl = new Http4sDsl[Task] {}
+  import dsl._
+
+  private object Code extends QueryParamDecoderMatcher[String]("code")
+  private val service: HttpService[Task] = HttpService[Task] {
+    case GET -> Root :? Code(code) =>
+      ptoken.complete(code).toTask >> Ok(
+        "That seems to have worked, go back to the console."
+      )
+  }
+
+  private val launch: Task[Server[Task]] =
+    BlazeBuilder[Task].bindHttp(0, "localhost").mountService(service, "/").start
+
+  // we could put failures into pserver if we wanted "start once" semantics.
+  def start: Task[String Refined Url] =
+    for {
+      server  <- launch
+      updated <- pserver.complete(server)
+      _ <- if (updated) Task.unit
+          else server.shutdown *> Task.failMessage("a server was already up")
+    } yield mkUrl(server)
+
+  // the 1 second sleep is necessary to avoid shutting down the server before
+  // the response is sent back to the browser (yes, we are THAT quick!)
+  def stop: Task[CodeToken] =
+    for {
+      server <- pserver.get.toTask
+      token  <- ptoken.get.toTask
+      _      <- IO.sleep(1.second) *> server.shutdown
+    } yield CodeToken(token, mkUrl(server))
+
+  def open(url: String Refined Url): Task[Unit] = Browser.open(url)
+
+  private def mkUrl(s: Server[Task]): String Refined Url = {
+    val port = s.address.getPort // scalafix:ok
+    Refined.unsafeApply(str"http://localhost:${port.toString}/") // scalafix:ok
+  }
+
+}
+object BlazeUserInteraction {
+  def apply(): Task[BlazeUserInteraction] = {
+    for {
+      p1 <- Promise.make[Void, Server[Task]]
+      p2 <- Promise.make[Void, String]
+    } yield new BlazeUserInteraction(p1, p2)
+  }.widenError
+}
