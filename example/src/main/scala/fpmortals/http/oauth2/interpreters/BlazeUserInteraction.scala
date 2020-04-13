@@ -6,8 +6,13 @@ package http
 package oauth2
 package interpreters
 
-import prelude._, T._, Z._
+import cats._, implicits._
+import cats.effect.IO
+import cats.effect.concurrent.Deferred
 
+import scala.concurrent.duration._
+
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 import org.http4s._
 import org.http4s.dsl._
@@ -15,56 +20,54 @@ import org.http4s.server.Server
 import org.http4s.server.blaze._
 
 import fpmortals.os.Browser
+import fpmortals.time.SleepIO
 
 final class BlazeUserInteraction private (
-  pserver: Promise[Void, Server[Task]],
-  ptoken: Promise[Void, String]
-) extends UserInteraction[Task] {
-  private val dsl = new Http4sDsl[Task] {}
+  pserver: Deferred[IO, Server[IO]],
+  ptoken: Deferred[IO, String]
+) extends UserInteraction[IO] {
+  private val dsl = new Http4sDsl[IO] {}
+  private val sleeper = new SleepIO
   import dsl._
 
   private object Code extends QueryParamDecoderMatcher[String]("code")
-  private val service: HttpService[Task] = HttpService[Task] {
+  private val service: HttpService[IO] = HttpService[IO] {
     case GET -> Root :? Code(code) =>
-      ptoken.complete(code).toTask >> Ok(
-        "That seems to have worked, go back to the console."
-      )
+      ptoken.complete(code) as
+        Ok("That seems to have worked, go back to the console.")
   }
 
-  private val launch: Task[Server[Task]] =
-    BlazeBuilder[Task].bindHttp(0, "localhost").mountService(service, "/").start
+  private val launch: IO[Server[IO]] =
+    BlazeBuilder[IO].bindHttp(0, "localhost").mountService(service, "/").start
 
-  // we could put failures into pserver if we wanted "start once" semantics.
-  def start: Task[String Refined Url] =
+  def start: IO[String Refined Url] =
     for {
       server  <- launch
-      updated <- pserver.complete(server)
-      _ <- if (updated) Task.unit
-          else server.shutdown *> Task.failMessage("a server was already up")
+      _ <- pserver.complete(server)
     } yield mkUrl(server)
 
   // the 1 second sleep is necessary to avoid shutting down the server before
   // the response is sent back to the browser (yes, we are THAT quick!)
-  def stop: Task[CodeToken] =
+  def stop: IO[CodeToken] =
     for {
-      server <- pserver.get.toTask
-      token  <- ptoken.get.toTask
-      _      <- IO.sleep(1.second) *> server.shutdown
+      server <- pserver.get
+      token  <- ptoken.get
+      _      <- sleeper.sleep(1.second) *> server.shutdown
     } yield CodeToken(token, mkUrl(server))
 
-  def open(url: String Refined Url): Task[Unit] = Browser.open(url)
+  def open(url: String Refined Url): IO[Unit] = Browser.open(url)
 
-  private def mkUrl(s: Server[Task]): String Refined Url = {
+  private def mkUrl(s: Server[IO]): String Refined Url = {
     val port = s.address.getPort
-    Refined.unsafeApply(str"http://localhost:${port.toString}/")
+    Refined.unsafeApply(s"http://localhost:${port.toString}/")
   }
 
 }
 object BlazeUserInteraction {
-  def apply(): Task[BlazeUserInteraction] = {
+  def apply(): IO[BlazeUserInteraction] = {
     for {
-      p1 <- Promise.make[Void, Server[Task]]
-      p2 <- Promise.make[Void, String]
+      p1 <- Deferred[IO, Server[IO]]
+      p2 <- Deferred[IO, String]
     } yield new BlazeUserInteraction(p1, p2)
-  }.widenError
+  }
 }

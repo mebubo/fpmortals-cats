@@ -4,8 +4,10 @@
 package fpmortals
 package http
 
-import prelude._, Z._
+import cats._, implicits._
+import cats.mtl._, cats.mtl.implicits._
 
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 import jsonformat._
 import http.encoding._
@@ -21,13 +23,13 @@ trait OAuth2JsonClient[F[_]] {
 
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A]
 
   def post[P: UrlEncodedWriter, A: JsDecoder](
     uri: String Refined Url,
     payload: P,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A]
 
 }
@@ -38,7 +40,7 @@ object OAuth2JsonClient {
 
 import OAuth2JsonClient.mkHeader
 
-final class OAuth2JsonClientModule[F[_]](
+final class OAuth2JsonClientModule[F[_]: Monad](
   token: RefreshToken
 )(
   H: JsonClient[F],
@@ -55,7 +57,7 @@ final class OAuth2JsonClientModule[F[_]](
 
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A] =
     for {
       bearer <- goodBearer
@@ -65,7 +67,7 @@ final class OAuth2JsonClientModule[F[_]](
   def post[P: UrlEncodedWriter, A: JsDecoder](
     uri: String Refined Url,
     payload: P,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A] =
     for {
       bearer <- goodBearer
@@ -77,7 +79,7 @@ final class OAuth2JsonClientModule[F[_]](
       now    <- T.now
       stored <- F.get
       valid <- {
-        if (stored.expires < now) A.bearer(token) >>! F.put
+        if (stored.expires < now) A.bearer(token) flatTap F.set
         else stored.pure[F]
       }
     } yield valid
@@ -95,13 +97,13 @@ final class BearerJsonClientModule[F[_]: Monad](
 
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A] = H.get(uri, mkHeader(bearer) :: headers)
 
   def post[P: UrlEncodedWriter, A: JsDecoder](
     uri: String Refined Url,
     payload: P,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A] = H.post(uri, payload, mkHeader(bearer) :: headers)
 
 }

@@ -5,13 +5,16 @@ package fpmortals
 package http
 package interpreters
 
-import prelude._, T._, Z._
+import cats._, implicits._
+import cats.effect.{ IO, LiftIO }
 
 import java.lang.Throwable
 import scala.collection.immutable.List
 
 import jsonformat._
 import jsonformat.JsDecoder.ops._
+
+import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 
 import http.encoding._
@@ -23,27 +26,30 @@ import org.http4s.headers.`Content-Type`
 import org.http4s.client.Client
 import org.http4s.client.blaze.{ BlazeClientConfig, Http1Client }
 
-final class BlazeJsonClient[F[_]] private (H: Client[Task])(
+final class BlazeJsonClient[F[_]: Monad] private (H: Client[IO])(
   implicit
   F: MonadError[F, JsonClient.Error],
-  I: MonadIO[F, Throwable]
+  I: LiftIO[F]
 ) extends JsonClient[F] {
 
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A] =
     I.liftIO(
         H.fetch(
-          http4s.Request[Task](
+          http4s.Request[IO](
             uri = convert(uri),
             headers = convert(headers)
           )
         )(handler[A])
-      ).emap(identity)
+      ).flatMap {
+      case Left(e) => F.raiseError(e)
+      case Right(a) => Monad[F].pure(a)
+    }
 
-  private implicit val encoder: EntityEncoder[Task, String Refined UrlEncoded] =
-    EntityEncoder[Task, String]
+  private implicit val encoder: EntityEncoder[IO, String Refined UrlEncoded] =
+    EntityEncoder[IO, String]
       .contramap[String Refined UrlEncoded](_.value)
       .withContentType(
         `Content-Type`(MediaType.`application/x-www-form-urlencoded`)
@@ -52,12 +58,12 @@ final class BlazeJsonClient[F[_]] private (H: Client[Task])(
   def post[P: UrlEncodedWriter, A: JsDecoder](
     uri: String Refined Url,
     payload: P,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A] =
     I.liftIO(
         H.fetch(
           http4s
-            .Request[Task](
+            .Request[IO](
               method = http4s.Method.POST,
               uri = convert(uri),
               headers = convert(headers)
@@ -67,9 +73,12 @@ final class BlazeJsonClient[F[_]] private (H: Client[Task])(
             )
         )(handler[A])
       )
-      .emap(identity)
+      .flatMap {
+        case Left(e) => F.raiseError(e)
+        case Right(a) => Monad[F].pure(a)
+      }
 
-  private[this] def convert(headers: IList[(String, String)]): http4s.Headers =
+  private[this] def convert(headers: List[(String, String)]): http4s.Headers =
     http4s.Headers(
       headers.foldRight(List[http4s.Header]()) {
         case ((key, value), acc) => http4s.Header(key, value) :: acc
@@ -81,10 +90,10 @@ final class BlazeJsonClient[F[_]] private (H: Client[Task])(
     http4s.Uri.unsafeFromString(uri.value)
 
   private[this] def handler[A: JsDecoder](
-    resp: http4s.Response[Task]
-  ): Task[JsonClient.Error \/ A] =
+    resp: http4s.Response[IO]
+  ): IO[Either[JsonClient.Error, A]] =
     if (!resp.status.isSuccess)
-      Task.now(JsonClient.ServerError(resp.status.code).left)
+      IO(Left(JsonClient.ServerError(resp.status.code)))
     else
       for {
         text <- resp.body.through(fs2.text.utf8Decode).compile.foldMonoid
@@ -98,7 +107,7 @@ object BlazeJsonClient {
   def apply[F[_]](
     implicit
     F: MonadError[F, JsonClient.Error],
-    I: MonadIO[F, Throwable]
-  ): Task[JsonClient[F]] =
+    I: LiftIO[F]
+  ): IO[JsonClient[F]] =
     Http1Client(BlazeClientConfig.defaultConfig).map(new BlazeJsonClient(_))
 }

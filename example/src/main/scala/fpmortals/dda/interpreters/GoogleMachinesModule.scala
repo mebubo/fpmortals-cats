@@ -5,7 +5,7 @@ package fpmortals
 package dda
 package interpreters
 
-import prelude._, Z._
+import cats._, data._, implicits._
 
 import jsonformat._
 import JsDecoder.fail
@@ -15,10 +15,10 @@ import time._
 import http._
 
 final class GoogleMachinesModule[F[_]](
-  @unused H: OAuth2JsonClient[F]
+  H: OAuth2JsonClient[F]
 ) extends Machines[F] {
 
-  def getAlive: F[MachineNode ==>> Epoch]      = ???
+  def getAlive: F[Map[MachineNode, Epoch]]     = ???
   def getManaged: F[NonEmptyList[MachineNode]] = ???
   def getTime: F[Epoch]                        = ???
   def start(node: MachineNode): F[Unit]        = ???
@@ -27,22 +27,20 @@ final class GoogleMachinesModule[F[_]](
 }
 
 // https://cloud.google.com/container-engine/reference/rest/v1/NodeConfig
-@deriving(Equal, Show, JsDecoder)
 final case class NodeConfig(
   machineType: String,
   diskSizeGb: Int,
-  oauthScopes: IList[String],
+  oauthScopes: List[String],
   serviceAccount: String,
-  metadata: String ==>> String,
+  metadata: Map[String, String],
   imageType: String,
-  labels: String ==>> String,
+  labels: Map[String, String],
   localSsdCount: Int,
-  tags: String ==>> String,
+  tags: Map[String, String],
   preemptible: Boolean
 )
 
 // https://cloud.google.com/container-engine/reference/rest/v1/projects.zones.clusters#MasterAuth
-@deriving(Equal, Show, JsDecoder)
 final case class MasterAuth(
   username: String,
   password: String,
@@ -52,41 +50,34 @@ final case class MasterAuth(
 )
 
 // https://cloud.google.com/container-engine/reference/rest/v1/projects.zones.clusters#AddonsConfig
-@deriving(Equal, Show, JsDecoder)
 final case class HttpLoadBalancing(disabled: Boolean)
-@deriving(Equal, Show, JsDecoder)
 final case class HorizontalPodAutoscaling(disabled: Boolean)
-@deriving(Equal, Show, JsDecoder)
 final case class AddonsConfig(
   httpLoadBalancing: HttpLoadBalancing,
   horizontalPodAutoscaling: HorizontalPodAutoscaling
 )
 
 // https://cloud.google.com/container-engine/reference/rest/v1/projects.zones.clusters.nodePools#NodePool
-@deriving(Equal, Show, JsDecoder)
 final case class NodePoolAutoscaling(
   enabled: Boolean,
   minNodeCount: Int,
   maxNodeCount: Int
 )
-@deriving(Equal, Show, JsDecoder)
 final case class AutoUpgradeOptions(
   autoUpgradeStartTime: String,
   description: String
 )
-@deriving(Equal, Show, JsDecoder)
 final case class NodeManagement(
   autoUpgrade: Boolean,
   upgradeOptions: AutoUpgradeOptions
 )
-@deriving(Equal, Show, JsDecoder)
 final case class NodePool(
   name: String,
   config: NodeConfig,
   initialNodeCount: Int,
   selfLink: String,
   version: String,
-  instanceGroupUrls: IList[String],
+  instanceGroupUrls: List[String],
   status: Status,
   statusMessage: String,
   autoscaling: NodePoolAutoscaling,
@@ -94,7 +85,6 @@ final case class NodePool(
 )
 
 // https://cloud.google.com/container-engine/reference/rest/v1/projects.zones.clusters#Status
-@deriving(Equal, Show)
 sealed abstract class Status
 object Status {
   case object STATUS_UNSPECIFIED extends Status
@@ -105,18 +95,17 @@ object Status {
   case object ERROR              extends Status
 
   implicit val decoder: JsDecoder[Status] = JsDecoder[String].emap {
-    case "STATUS_UNSPECIFIED" => STATUS_UNSPECIFIED.right
-    case "PROVISIONING"       => PROVISIONING.right
-    case "RUNNING"            => RUNNING.right
-    case "RECONCILING"        => RECONCILING.right
-    case "STOPPING"           => STOPPING.right
-    case "ERROR"              => ERROR.right
+    case "STATUS_UNSPECIFIED" => Right(STATUS_UNSPECIFIED)
+    case "PROVISIONING"       => Right(PROVISIONING)
+    case "RUNNING"            => Right(RUNNING)
+    case "RECONCILING"        => Right(RECONCILING)
+    case "STOPPING"           => Right(STOPPING)
+    case "ERROR"              => Right(ERROR)
     case other                => fail("a valid status", JsString(other))
   }
 }
 
 // https://cloud.google.com/container-engine/reference/rest/v1/projects.zones.clusters#Cluster
-@deriving(Equal, Show, JsDecoder)
 final case class Cluster(
   name: String,
   description: String,
@@ -129,8 +118,8 @@ final case class Cluster(
   clusterIpv4Cidr: String,
   addonsConfig: AddonsConfig,
   subnetwork: String,
-  nodePools: IList[NodePool],
-  locations: IList[String],
+  nodePools: List[NodePool],
+  locations: List[String],
   enableKubernetesAlpha: Boolean,
   selfLink: String,
   zone: String,
@@ -143,7 +132,7 @@ final case class Cluster(
   statusMessage: String,
   nodeIpv4CidrSize: Int,
   servicesIpv4Cidr: String,
-  instanceGroupUrls: IList[String],
+  instanceGroupUrls: List[String],
   currentNodeCount: Int,
   expireTime: String
 )

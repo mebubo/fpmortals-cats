@@ -29,6 +29,8 @@ package time {
     def -(e: Epoch): FiniteDuration = (millis - e.millis).millis
   }
   object Epoch {
+    implicit val order: Order[Epoch] = Order[Long].imap(Epoch(_))(_.millis)
+
     def now: IO[Epoch] =
       IO(Epoch(System.currentTimeMillis))
 

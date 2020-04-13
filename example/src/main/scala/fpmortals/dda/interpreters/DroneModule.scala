@@ -5,12 +5,12 @@ package fpmortals
 package dda
 package interpreters
 
-import prelude._
+import cats._, implicits._
 import algebra._
 import http._
 
 final class DroneModule[F[_]](
-  @unused H: OAuth2JsonClient[F]
+  H: OAuth2JsonClient[F]
 ) extends Drone[F] {
   // the bad news is that Drone doesn't currently implement the APIs need for
   // this. I was more or less told about a year ago that this would all be in

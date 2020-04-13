@@ -18,6 +18,7 @@ libraryDependencies ++= Seq(
 
 val http4sVersion = "0.18.16"
 libraryDependencies ++= Seq(
+  "org.typelevel"         %% "jawn-parser"         % "1.0.0",
   "com.propensive"        %% "magnolia"            % "0.14.4",
   "com.chuusai"           %% "shapeless"           % "2.3.3",
   "com.lihaoyi"           %% "sourcecode"          % "0.1.4",
