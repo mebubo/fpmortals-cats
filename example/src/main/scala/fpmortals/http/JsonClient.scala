@@ -32,7 +32,7 @@ trait JsonClient[F[_]] {
 
 }
 object JsonClient {
-  sealed abstract class Error
+  sealed abstract class Error extends Throwable
   final case class ServerError(status: Int)       extends Error
   final case class DecodingError(message: String) extends Error
 }

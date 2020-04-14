@@ -7,7 +7,7 @@ package oauth2
 package interpreters
 
 import cats._, implicits._
-import cats.effect.IO
+import cats.effect.{ ConcurrentEffect, Effect, IO }
 import cats.effect.concurrent.Deferred
 
 import scala.concurrent.duration._
@@ -20,27 +20,27 @@ import org.http4s.server.Server
 import org.http4s.server.blaze._
 
 import fpmortals.os.Browser
-import fpmortals.time.SleepIO
+import fpmortals.time.Sleep
 
-final class BlazeUserInteraction private (
-  pserver: Deferred[IO, Server[IO]],
-  ptoken: Deferred[IO, String]
-) extends UserInteraction[IO] {
-  private val dsl = new Http4sDsl[IO] {}
-  private val sleeper = new SleepIO
+final class BlazeUserInteraction[F[_]: Effect] private (
+  S: Sleep[F],
+  pserver: Deferred[F, Server[F]],
+  ptoken: Deferred[F, String]
+) extends UserInteraction[F] {
+  private val dsl = new Http4sDsl[F] {}
   import dsl._
 
   private object Code extends QueryParamDecoderMatcher[String]("code")
-  private val service: HttpService[IO] = HttpService[IO] {
+  private val service: HttpService[F] = HttpService[F] {
     case GET -> Root :? Code(code) =>
-      ptoken.complete(code) as
+      ptoken.complete(code) >>
         Ok("That seems to have worked, go back to the console.")
   }
 
-  private val launch: IO[Server[IO]] =
-    BlazeBuilder[IO].bindHttp(0, "localhost").mountService(service, "/").start
+  private val launch: F[Server[F]] =
+    BlazeBuilder[F].bindHttp(0, "localhost").mountService(service, "/").start
 
-  def start: IO[String Refined Url] =
+  def start: F[String Refined Url] =
     for {
       server  <- launch
       _ <- pserver.complete(server)
@@ -48,26 +48,26 @@ final class BlazeUserInteraction private (
 
   // the 1 second sleep is necessary to avoid shutting down the server before
   // the response is sent back to the browser (yes, we are THAT quick!)
-  def stop: IO[CodeToken] =
+  def stop: F[CodeToken] =
     for {
       server <- pserver.get
       token  <- ptoken.get
-      _      <- sleeper.sleep(1.second) *> server.shutdown
+      _      <- S.sleep(1.second) *> server.shutdown
     } yield CodeToken(token, mkUrl(server))
 
-  def open(url: String Refined Url): IO[Unit] = Browser.open(url)
+  def open(url: String Refined Url): F[Unit] = Effect[F].liftIO(Browser.open(url))
 
-  private def mkUrl(s: Server[IO]): String Refined Url = {
+  private def mkUrl(s: Server[F]): String Refined Url = {
     val port = s.address.getPort
     Refined.unsafeApply(s"http://localhost:${port.toString}/")
   }
 
 }
 object BlazeUserInteraction {
-  def apply(): IO[BlazeUserInteraction] = {
+  def apply[F[_]: ConcurrentEffect](S: Sleep[F]): F[BlazeUserInteraction[F]] = {
     for {
-      p1 <- Deferred[IO, Server[IO]]
-      p2 <- Deferred[IO, String]
-    } yield new BlazeUserInteraction(p1, p2)
+      p1 <- Deferred[F, Server[F]]
+      p2 <- Deferred[F, String]
+    } yield new BlazeUserInteraction(S, p1, p2)
   }
 }

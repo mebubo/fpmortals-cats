@@ -25,21 +25,16 @@ object JsParser extends SupportParser[JsValue] {
       val jtrue: JsBoolean   = JsBoolean(true)
       def jnum(cs: CharSequence, decIndex: Int, expIndex: Int): JsValue = {
         val s = cs.toString
-        val n =
-          if (decIndex == -1)
-            s.parseLong.map(JsInteger(_))
-          else if (s.endsWith(".0"))
-            s.substring(0, s.length - 2).parseLong.map(JsInteger(_))
-          else
-            s.parseDouble.map(JsDouble(_))
-        n.getOrElse(
-          throw new IllegalArgumentException(s"bad number $s")
-            with NoStackTrace
-        )
+        if (decIndex == -1)
+          JsInteger(s.toLong)
+        else if (s.endsWith(".0"))
+          JsInteger(s.substring(0, s.length - 2).toLong)
+        else
+          JsDouble(s.toDouble)
       }
 
       def jstring(s: CharSequence): JsString          = JsString(s.toString)
-      def jarray(vs: List[JsValue]): JsArray          = JsArray(vs.toIList)
-      def jobject(vs: Map[String, JsValue]): JsObject = JsObject(vs.asIList)
+      def jarray(vs: List[JsValue]): JsArray          = JsArray(vs.toList)
+      def jobject(vs: Map[String, JsValue]): JsObject = JsObject(vs.toList)
     }
 }
