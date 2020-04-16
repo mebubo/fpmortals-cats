@@ -10,6 +10,8 @@ import jsonformat.JsDecoder
 import eu.timepit.refined.api.Refined
 import eu.timepit.refined.string.Url
 
+import scala.util.control.NoStackTrace
+
 import http.encoding._
 
 /**
@@ -32,7 +34,7 @@ trait JsonClient[F[_]] {
 
 }
 object JsonClient {
-  sealed abstract class Error extends Throwable
+  sealed abstract class Error extends Throwable with NoStackTrace
   final case class ServerError(status: Int)       extends Error
   final case class DecodingError(message: String) extends Error
 }

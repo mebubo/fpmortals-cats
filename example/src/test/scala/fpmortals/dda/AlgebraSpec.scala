@@ -5,13 +5,11 @@ package fpmortals
 package dda
 package algebra
 
-import prelude._, Z._, S._
-import Coproduct.{ leftc, rightc }
-
-import scalaz.ioeffect.RTS
+import cats._, data._, implicits._
+import cats.data.EitherK.{ leftc, rightc }
 
 import fpmortals.time.Epoch
-import Test.unimplemented
+import fpmortals.prelude.Test.unimplemented
 
 object Demo {
   def todo[F[_]: Monad](M: Machines[F], D: Drone[F]): F[Int] =
@@ -20,7 +18,7 @@ object Demo {
       alive <- M.getAlive
     } yield (work - alive.size)
 
-  type Ast[a] = Coproduct[Machines.Ast, Drone.Ast, a]
+  type Ast[a] = EitherK[Machines.Ast, Drone.Ast, a]
   type Ctx[a] = Free[Ast, a]
   val program: Ctx[Int] = todo[Ctx](Machines.liftF, Drone.liftF)
 }
@@ -142,81 +140,6 @@ final class AlgebraSpec extends Test with RTS {
       .foldMap(M)
       .exec(ISet.empty)
       .shouldBe(ISet.empty)
-  }
-
-  // this is a pretty advanced, crazy, idea that was cut from the book. because
-  // it is so crazy.
-  it.should("support monkey patching part 2").in {
-    import Monkeys.S
-    type T[a] = State[S, a]
-
-    type Orig[a] = Coproduct[Machines.Ast, Drone.Ast, a]
-
-    val M: Machines.Ast ~> T = Mocker.stub[Unit] {
-      case Machines.Start(node) => State.modify[S](_.addSingle(node))
-    }
-    val D: Drone.Ast ~> T = Mocker.stub[Int] {
-      case Drone.GetBacklog() => 2.pure[T]
-    }
-    val B: Batch.Ast ~> T = Mocker.stub[Unit] {
-      case Batch.Start(nodes) => State.modify[S](_.addBatch(nodes))
-    }
-
-    def program[F[_]: Monad](M: Machines[F], D: Drone[F]): F[Unit] =
-      for {
-        todo <- D.getBacklog
-        _    <- (1 |-> todo).traverse(id => M.start(MachineNode(id.shows)))
-      } yield ()
-
-    program(Machines.liftF[Orig], Drone.liftF[Orig])
-      .foldMap(or(M, D))
-      .exec(S(IList.empty, IList.empty))
-      .shouldBe(S(IList(MachineNode("2"), MachineNode("1")), IList.empty))
-
-    type Waiting      = IList[MachineNode]
-    type Extension[a] = Coproduct[Batch.Ast, Orig, a]
-    type Patched[a]   = StateT[Free[Extension, ?], Waiting, a]
-
-    def monkey(max: Int) = new (Orig ~> Patched) {
-      def apply[α](fa: Orig[α]): Patched[α] = fa.run match {
-        case -\/(Machines.Start(node)) =>
-          StateT { waiting =>
-            if (waiting.length >= max) {
-              val start = Batch.Start(NonEmptyList.nel(node, waiting))
-              Free
-                .liftF[Extension, Unit](leftc(start))
-                .strengthL(IList.empty)
-            } else
-              Free
-                .pure[Extension, Unit](())
-                .strengthL(node :: waiting)
-          }
-
-        case _ =>
-          Free
-            .liftF[Extension, α](rightc(fa))
-            .liftM[StateT[?[_], Waiting, ?]]
-      }
-    }
-
-    program(Machines.liftF[Orig], Drone.liftF[Orig])
-      .foldMap(monkey(1))
-      .run(IList.empty)
-      .foldMap(or(B, or(M, D)))
-      .run(S(IList.empty, IList.empty))
-      .shouldBe(
-        (
-          S(
-            IList.empty, // no singles
-            IList(NonEmptyList(MachineNode("2"), MachineNode("1")))
-          ),
-          (
-            IList.empty, // no Waiting
-            ()
-          )
-        )
-      )
-
   }
 
   it.should("batch calls without any crazy hacks").in {

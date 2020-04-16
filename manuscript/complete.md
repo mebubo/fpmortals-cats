@@ -5130,3 +5130,874 @@ a functional data structure from the literature is a good contribution to the
 Cats ecosystem.
 
 
+# Cats Monads
+
+In this chapter we will study some of the most important implementations of
+`Monad` and in particular those that are provided by the `cats-mtl` library
+which can be installed with
+
+{lang="text"}
+~~~~~~~~
+  libraryDependencies += "org.typelevel" %% "cats-mtl-core" % "0.7.1"
+~~~~~~~~
+
+
+## Always in motion is the `Future`
+
+The biggest problem with `Future` is that it eagerly schedules work during
+construction. As we discovered in the introduction, `Future` conflates the
+definition of a program with *interpreting* it (i.e. running it).
+
+`Future` is also suboptimal from a performance perspective: every time `.flatMap` is
+called, a closure is submitted to an `Executor`, resulting in unnecessary thread
+scheduling and context switching. It is not unusual to see 50% of our CPU power
+dealing with thread scheduling, instead of doing the work. So much so that
+parallelising work with `Future` can often make it *slower*.
+
+Combined, eager evaluation and executor submission means that it is impossible
+to know when a job started, when it finished, or the sub-tasks that were spawned
+to calculate the final result.
+
+Furthermore, `Future.flatMap` requires an `ExecutionContext` to be in implicit
+scope: users are forced to think about business logic and execution semantics at
+the same time.
+
+
+## Effects and Side Effects
+
+If we cannot call side-effecting methods in our business logic, or in `Future`
+(or `Id`, or `Either`, or `Const`, etc), **when can** we write them? The answer
+is: in a `Monad` that delays execution until it is interpreted at the
+application's entrypoint. We can now refer to I/O and mutation as an *effect* on
+the world, captured by the type system, as opposed to having a hidden
+*side-effect*.
+
+The simplest implementation of such a `Monad` is `IO`, formalising the version
+we wrote in the introduction:
+
+{lang="text"}
+~~~~~~~~
+  final class IO[A](val interpret: () => A)
+  object IO {
+    def apply[A](a: =>A): IO[A] = new IO(() => a)
+  
+    implicit val monad: Monad[IO] = new Monad[IO] {
+      def pure[A](a: A): IO[A] = IO(a)
+      def flatMap[A, B](fa: IO[A])(f: A => IO[B]): IO[B] =
+        IO(f(fa.interpret()).interpret())
+      ...
+    }
+  }
+~~~~~~~~
+
+The `.interpret` method is only called once, in the entrypoint of an
+application:
+
+{lang="text"}
+~~~~~~~~
+  def main(args: Array[String]): Unit = program.interpret()
+~~~~~~~~
+
+However, there are two big problems with this simple `IO`:
+
+1.  it can stack overflow
+2.  it doesn't support parallel computations
+
+Both of these problems will be overcome in this chapter. However, no matter how
+complicated the internal implementation of a `Monad`, the principles described
+here remain true: we're modularising the definition of a program and its
+execution, such that we can capture effects in type signatures, allowing us to
+reason about them, and reuse more code.
+
+
+## Stack Safety
+
+On the JVM, every method call adds an entry to the call stack of the `Thread`,
+like adding to the front of a `List`. When the method completes, the method at
+the `.head` is thrown away. The maximum length of the call stack is determined by
+the `-Xss` flag when starting up `java`. Tail recursive methods are detected by
+the Scala compiler and do not add an entry. If we hit the limit, by calling too
+many chained methods, we get a `StackOverflowError`.
+
+Unfortunately, every nested call to our `IO`'s `.flatMap` adds another method
+call to the stack. The easiest way to see this is to repeat an action forever,
+and see if it survives for longer than a few seconds. We can create a (broken)
+recursive `.forever` with
+
+{lang="text"}
+~~~~~~~~
+  def forever[F[_]: FlatMap, A](fa: F[A]): F[Unit] =
+    fa.flatMap(_ => forever(fa)).void
+~~~~~~~~
+
+and then call it on an action that just prints to the screen
+
+{lang="text"}
+~~~~~~~~
+  scala> val hello = IO { println("hello") }
+  scala> forever(hello).interpret()
+  
+  hello
+  hello
+  hello
+  ...
+  hello
+  java.lang.StackOverflowError
+      at java.io.FileOutputStream.write(FileOutputStream.java:326)
+      at ...
+      at monadio.IO$$anon$1.$anonfun$bind$1(monadio.scala:18)
+      at monadio.IO$$anon$1.$anonfun$bind$1(monadio.scala:18)
+      at ...
+~~~~~~~~
+
+A way to achieve stack safety is to convert method calls into references to an
+ADT, the `Free` monad:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Free[S[_], A]
+  object Free {
+    final case class Pure[S[_], A](a: A) extends Free[S, A]
+    final case class Suspend[S[_], A](a: S[A]) extends Free[S, A]
+    final case class FlatMapped[S[_], B, C](c: Free[S, C], f: C => Free[S, B]) extends Free[S, B]
+    ...
+  }
+~~~~~~~~
+
+The `Free` ADT is a natural data type representation of the `Monad` interface:
+
+1.  `Pure` represents `.pure`
+2.  `FlatMapped` represents `.flatMap`
+
+When an ADT mirrors the arguments of related functions, it is called a *Church
+encoding*.
+
+`Free` is named because it can be *generated for free* for any `S[_]`. For
+example, we could set `S` to be the `Drone` or `Machines` algebras from Chapter
+3 and generate a data structure representation of our program. We will return to
+why this is useful at the end of this chapter.
+
+
+### `Trampoline`
+
+`Free` is more general than we need for now. Setting the algebra `S[_]` to
+`Function0`, a deferred calculation or *thunk*, we get `Trampoline` and can
+implement a stack safe `Monad`
+
+{lang="text"}
+~~~~~~~~
+  type Trampoline[A] = Free[Function0, A]
+  implicit val trampoline: Monad[Trampoline] =
+    new Monad[Trampoline] with Monad[Trampoline] {
+      def pure[A](a: A): Trampoline[A] = Pure(a)
+      def flatMap[A, B](fa: Trampoline[A])(f: A => Trampoline[B]): Trampoline[B] =
+        FlatMapped(fa, f)
+      def tailRecM[A, B](a: A)(f: A => Trampoline[Either[A, B]]): Trampoline[B] = flatMap(f(a)) {
+        case Left(a)  => tailRecM(a)(f)
+        case Right(b) => pure(b)
+      }
+    }
+~~~~~~~~
+
+Although this is not technically a `@tailrec` implementation of `tailRecM`, it
+uses constant stack space because each call returns a heap object (`.flatMap`
+will return a `FlatMapped`), which delays recursion.
+
+A> Called `Trampoline` because every time we `.flatMap` on the stack, we *bounce*
+A> back to the heap.
+
+Convenient functions are provided to create a `Trampoline` eagerly (`.done`) or
+by-name (`.delay`). We can also create a `Trampoline` from a by-name
+`Trampoline` (`.defer`):
+
+{lang="text"}
+~~~~~~~~
+  object Trampoline {
+    def done[A](a: A): Trampoline[A]                = Pure(a)
+    def delay[A](a: =>A): Trampoline[A]             = defer(done(a))
+    def defer[A](a: =>Trampoline[A]): Trampoline[A] = done(()).flatMap(_ => a)
+  }
+~~~~~~~~
+
+When we see `Trampoline[A]` in a codebase we can always mentally substitute it
+with `A`, because it is simply adding stack safety to the pure computation. We
+get the `A` by interpreting `Free`, provided by `.run`.
+
+A> It is instructive, although not necessary, to understand how `Free.run` is
+A> implemented: `.resume` evaluates a single layer of the `Free`, and `go` runs it
+A> to completion.
+A> 
+A> In the following `Trampoline[A]` is used as a synonym for `Free[Function0, A]` to
+A> make the code easier to read.
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   sealed abstract class Trampoline[A] {
+A>     def run: A = go(f => f())
+A>   
+A>     def go(f: (() => Trampoline[A]) => Trampoline[A]): A = {
+A>       @tailrec def loop(t: Trampoline[A]): A = t.resume match {
+A>         case Left(s) => loop(f(s))
+A>         case Right(r) => r
+A>       }
+A>       loop(this)
+A>     }
+A>   
+A>     @tailrec def resume: Either[S[Trampoline[A]], A] = this match {
+A>       case Pure(a)    => Right(a)
+A>       case Suspend(t) => Left(t.map(Pure(_)))
+A>       case FlatMapped(c, f) => c match {
+A>         case Pure(a)          => f(a).resume
+A>         case Suspend(t)       => Left(t.map(f))
+A>         case FlatMapped(d, g) => d.flatMap(dd => g(dd).flatMap(f)).resume
+A>       }
+A>     }
+A>     ...
+A>   }
+A> ~~~~~~~~
+A> 
+A> The case that is most likely to cause confusion is when we have nested `FlatMapped`:
+A> apply the inner function `g` then pass it to the outer one `f`, it is just
+A> function composition.
+
+
+### Stack Safe `IO`
+
+Our `IO` can be made stack safe thanks to `Trampoline`:
+
+{lang="text"}
+~~~~~~~~
+  final class IO[A](val tramp: Trampoline[A]) {
+    def unsafePerformIO(): A = tramp.run
+  }
+  object IO {
+    def apply[A](a: =>A): IO[A] = new IO(Trampoline.delay(a))
+  
+    implicit val monad: Monad[IO] =
+      new Monad[IO] with StackSafeMonad[IO] {
+        def pure[A](a: A): IO[A] = IO(a)
+        def flatMap[A, B](fa: IO[A])(f: A => IO[B]): IO[B] =
+          new IO(fa.tramp.flatMap(a => f(a).tramp))
+      }
+  }
+~~~~~~~~
+
+A> `StackSafeMonad` is a Cats mixin that implements the `.tailRecM` as previously
+A> written. It should only be used when the author of the `Monad` is certain that
+A> their implementation is stack safe: using it does not make an unsafe `Monad`
+A> safe.
+
+The interpreter, `.unsafePerformIO()`, has an intentionally scary name to
+discourage using it except in the entrypoint of the application.
+
+This time, using `FlatMap.foreverM` instead of our naive `.forever`, we don't
+get a stack overflow error
+
+{lang="text"}
+~~~~~~~~
+  scala> val hello = IO { println("hello") }
+  scala> FlatMap[IO].foreverM(hello).unsafePerformIO()
+  
+  hello
+  hello
+  hello
+  ...
+  hello
+~~~~~~~~
+
+Using a `Trampoline` typically introduces a performance regression vs a regular
+reference. It is `Free` in the sense of *freely generated*, not *free as in
+gratis*.
+
+A> Always benchmark instead of accepting sweeping statements about performance: it
+A> may well be the case that the garbage collector performs better for an
+A> application when using `Free` because of the reduced size of retained objects in
+A> the stack.
+
+
+## Monad Transformer Library
+
+Monad transformers are data structures that wrap an underlying value and provide
+a monadic *effect*.
+
+For example, in Chapter 2 we used `OptionT` to let us use `F[Option[A]]` in a
+`for` comprehension as if it was just a `F[A]`. This gave our program the effect
+of an *optional* value. Alternatively, we can get the effect of optionality if
+we have a `MonadPlus`.
+
+This subset of data types and extensions to `Monad` are often referred to as the
+*Monad Transformer Library* (MTL), summarised below. In this section, we will
+explain each of the transformers, why they are useful, and how they work.
+
+| Effect               | Underlying            | Transformer | Typeclass          |
+|-------------------- |--------------------- |----------- |------------------ |
+| optionality          | `F[Option[A]]`        | `OptionT`   |                    |
+| errors               | `F[Either[E, A]]`     | `EitherT`   | `MonadError`       |
+| a runtime value      | `A => F[B]`           | `ReaderT`   | `ApplicativeLocal` |
+| journal / multitask  | `F[(W, A)]`           | `WriterT`   | `FunctorListen`    |
+| evolving state       | `S => F[(S, A)]`      | `StateT`    | `MonadState`       |
+| keep calm & carry on | `F[Ior[E, A]]`        | `IorT`      | `MonadChronicle`   |
+| control flow         | `(A => F[B]) => F[B]` | `ContT`     |                    |
+
+
+### `.mapK` and `.liftF`
+
+It is typical that a transformer will implement methods named `.mapK` and
+`.liftF` having the following general pattern:
+
+{lang="text"}
+~~~~~~~~
+  final case class OptionT[F[_], A](value: F[Option[A]]) {
+    def mapK[G[_]](f: F ~> G): OptionT[G, A] = ...
+    ...
+  }
+  object OptionT {
+    def liftF[F[_]: Functor, A](fa: F[A]): OptionT[F, A] = ...
+    ...
+  }
+  
+  final case class EitherT[F[_], A, B](value: F[Either[A, B]]) {
+    def mapK[G[_]](f: F ~> G): EitherT[G, A, B] = ...
+    ...
+  }
+  object EitherT {
+    def liftF[F[_]: Functor, A, B](fb: F[B]): EitherT[F, A, B] = ...
+    ...
+  }
+~~~~~~~~
+
+`.mapK` lets us apply a natural transformation to the context.
+
+`.liftF` lets us create a monad transformer if we have an `F[A]`. For example,
+we can create an `OptionT[IO, String]` by calling `OptionT.liftF` on an
+`IO[String]`, which we seen in Chapter 2.
+
+Generally, there are three ways to create a monad transformer:
+
+-   from the underlying, using the transformer's constructor
+-   from a single value `A`, using `.pure` from the `Monad` syntax
+-   from an `F[A]`, using `.liftF` on the companion
+
+
+### `OptionT`
+
+{lang="text"}
+~~~~~~~~
+  final case class OptionT[F[_], A](value: F[Option[A]])
+  object OptionT {
+    def some[F[_]: Applicative, A](a: A): OptionT[F, A] = ...
+    def none[F[_]: Applicative, A]: OptionT[F, A] = ...
+    ...
+  }
+~~~~~~~~
+
+providing a `MonadPlus`
+
+{lang="text"}
+~~~~~~~~
+  implicit def monad[F[_]: Monad] = Monad[OptionT[F, ?]] {
+    def pure[A](a: A): OptionT[F, A] = OptionT.some(a)
+    def flatMap[A, B](fa: OptionT[F, A])(f: A => OptionT[F, B]): OptionT[F, B] =
+      fa.flatMap(f)
+  
+    def tailRecM[A, B](a: A)(f: A => OptionT[F, Either[A, B]]): OptionT[F, B] =
+      OptionT(a.tailRecM(a0 =>
+        f(a0).value.map(_.fold(Right(None))(_.map(b => Some(b))))))
+  }
+~~~~~~~~
+
+This monad looks fiddly, but it is just delegating everything to the `Monad[F]`
+and then re-wrapping with an `OptionT`, with `.tailRecM` returning a heap object
+to guarantee stack safety.
+
+With this monad we can write logic that handles optionality in the `F[_]`
+context, rather than carrying around `Option`.
+
+For example, say we are interfacing with a social media website to count the
+number of stars a user has, and we start with a `String` that may or may not
+correspond to a user. We have this algebra:
+
+{lang="text"}
+~~~~~~~~
+  trait Twitter[F[_]] {
+    def getUser(name: String): F[Option[User]]
+    def getStars(user: User): F[Int]
+  }
+  def T[F[_]](implicit t: Twitter[F]): Twitter[F] = t
+~~~~~~~~
+
+We need to call `.getUser` followed by `.getStars`. If we use `Monad` as our
+context, our function is difficult because we have to handle the `Empty` case:
+
+{lang="text"}
+~~~~~~~~
+  def stars[F[_]: Monad: Twitter](name: String): F[Option[Int]] = for {
+    maybeUser  <- T.getUser(name)
+    maybeStars <- maybeUser.traverse(T.getStars)
+  } yield maybeStars
+~~~~~~~~
+
+However, we can use `OptionT` in the return type:
+
+{lang="text"}
+~~~~~~~~
+  def stars[F[_]: Monad: Twitter](name: String): OptionT[F, Int] = for {
+    user  <- OptionT(T.getUser(name))
+    stars <- OptionT.liftF(T.getStars(user))
+  } yield stars
+~~~~~~~~
+
+An optional value is a special case of a value that may be an error, where we
+don't know anything about the error. The next section generalises `OptionT`.
+
+
+### `EitherT`
+
+`EitherT` allows us to use any type we want as the error value, providing
+contextual information about what went wrong.
+
+`EitherT` is a wrapper around an `F[Either[E, A]]`
+
+{lang="text"}
+~~~~~~~~
+  final case class EitherT[F[_], E, A](value: F[Either[E, A]])
+  object EitherT {
+    def fromEither[F[_]: Applicative, E, A](d: Either[E, A]): EitherT[F, E, A] = ...
+    def right[F[_]: Applicative, E, A](fb: F[E]): EitherT[F, E, A] = ...
+    def left[F[_]: Functor, E, A](fa: F[A]): EitherT[F, E, A] = ...
+    def rightT[F[_]: Applicative, E, A](e: E): EitherT[F, E, A] = ...
+    def leftT[F[_]: Applicative, E, A](a: A): EitherT[F, E, A] = ...
+    def fromOptionF[F[_]: Functor, E, A](fa: F[Option[A]], e: =>E): EitherT[F, E, A] = ...
+    ...
+  }
+~~~~~~~~
+
+The `Monad` is a `MonadError`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait ApplicativeError[F[_], E] extends Applicative[F] {
+    def raiseError[A](e: E): F[A]
+    def handleErrorWith[A](fa: F[A])(f: E => F[A]): F[A]
+  
+    def attempt[A](fa: F[A]): F[Either[E, A]] = ...
+    def handleError[A](fa: F[A])(f: E => A): F[A] = ...
+  
+    def fromEither[A](x: Either[E, A]): F[A] = ...
+    def fromOption[A](oa: Option[A], ifEmpty: =>E): F[A] = ...
+  }
+  
+  @typeclass trait MonadError[F[_], E] extends Monad[F] with ApplicativeError[F]
+~~~~~~~~
+
+`.raiseError` and `.handleErrorWith` are self-descriptive: the equivalent of `throw`
+and `catch` an exception, respectively.
+
+Although `EitherT` has a `MonadError`, it is worth noting that most of the
+functionality sits on `ApplicativeError`, which does not require a `Monad` and
+is therefore more generally applicable.
+
+`.attempt` brings errors into the value, which is useful for exposing errors in
+subsystems as first class values.
+
+`.handleError` is for turning an error into a value for all cases, as opposed to
+`.handleErrorWith` which takes an `F[A]` and therefore allows partial recovery.
+
+We can rewrite our `Twitter` example to make use of `MonadError`
+
+{lang="text"}
+~~~~~~~~
+  def stars[F[_]: Twitter](name: String)
+                          (implicit F: MonadError[F, String]): F[Int] = for {
+    user <- T.getUser(name).flatMap(F.fromOption(_, s"user '$name' not found"))
+    stars <- T.getStars(user)
+  } yield stars
+~~~~~~~~
+
+A> It is common to use `implicit` parameter blocks instead of context bounds when
+A> the signature of the typeclass has more than one parameter.
+A> 
+A> It is also common practice to name the implicit parameter after the primary
+A> type, in this case `F`.
+
+We can also return the transformer directly, which looks like
+
+{lang="text"}
+~~~~~~~~
+  def stars[F[_]: Monad: Twitter](name: String): EitherT[F, String, Int] = for {
+    user  <- EitherT.fromOptionF(T.getUser(name), s"user '$name' not found")
+    stars <- EitherT.right(T.getStars(user))
+  } yield stars
+~~~~~~~~
+
+The decision to require a more powerful `Monad` vs directly returning a
+transformer is something that each team can decide for themselves based on the
+interpreters that they plan on using for their program.
+
+Forgetting `EitherT` for a moment, the simplest instance of `MonadError` is for
+`Either`, perfect for testing business logic that requires a `MonadError` but
+does not need an effect. For example,
+
+{lang="text"}
+~~~~~~~~
+  final class MockTwitter extends Twitter[Either[String, ?]] {
+    def getUser(name: String): Either[String, Option[User]] =
+      if (name.contains(" ")) Right(None)
+      else if (name === "wobble") Left("connection error")
+      else Right(Some(User(name)))
+  
+    def getStars(user: User): Either[String, Int] =
+      if (user.name.startsWith("w")) Right(10)
+      else Left("stars have been replaced by hearts")
+  }
+~~~~~~~~
+
+Our unit tests for `.stars` might cover these cases:
+
+{lang="text"}
+~~~~~~~~
+  scala> stars("wibble")
+  Right(10)
+  
+  scala> stars("wobble")
+  Left(connection error)
+  
+  scala> stars("i'm a fish")
+  Left(user 'i'm a fish' not found)
+  
+  scala> stars("typelevel")
+  Left(stars have been replaced by hearts)
+~~~~~~~~
+
+As we've now seen several times, we can focus on testing the pure business logic
+without distraction.
+
+Finally, if we return to our `JsonClient` algebra from Chapter 4.3
+
+{lang="text"}
+~~~~~~~~
+  trait JsonClient[F[_]] {
+    def get[A: JsDecoder](
+      uri: String Refined Url,
+      headers: List[(String, String)]
+    ): F[A]
+    ...
+  }
+~~~~~~~~
+
+recall that we only coded the happy path into the API. If our interpreter for
+this algebra only works for an `F` having a `MonadError` we get to define the
+kinds of errors as a tangential concern. Indeed, we can have **two** layers of
+error if we define the interpreter for a `EitherT[IO, JsonClient.Error, ?]`
+
+{lang="text"}
+~~~~~~~~
+  object JsonClient {
+    sealed abstract class Error extends Throwable
+    final case class ServerError(status: Int)       extends Error
+    final case class DecodingError(message: String) extends Error
+  }
+~~~~~~~~
+
+which cover I/O (network) problems, server status problems, and issues with our
+modelling of the server's JSON payloads.
+
+
+#### Choosing an error type
+
+The community is undecided on the best strategy for the error type `E` in
+`MonadError`.
+
+One school of thought says that we should pick something general, like a
+`String`. The other school says that an application should have an ADT of
+errors, allowing different errors to be reported or handled differently.
+
+There are two problems with an ADT of errors on the application level:
+
+-   it is very awkward to create a new error. One file becomes a monolithic
+    repository of errors, aggregating the ADTs of individual subsystems.
+-   no matter how granular the errors are, the resolution is often the same: log
+    it and try it again, or give up. We don't need an ADT for this.
+
+An error ADT is of value if every entry allows a different kind of recovery to
+be performed.
+
+A compromise between an error ADT and a `String` is an intermediary format. JSON
+is a good choice as it can be understood by most logging and monitoring
+frameworks.
+
+A problem with not having a stacktrace is that it can be hard to localise which
+piece of code was the source of an error. With [`sourcecode` by Li Haoyi](https://github.com/lihaoyi/sourcecode/), we can
+include contextual information as metadata in our errors:
+
+{lang="text"}
+~~~~~~~~
+  final case class Meta(fqn: String, file: String, line: Int)
+  object Meta {
+    implicit def gen(implicit fqn: sourcecode.FullName,
+                              file: sourcecode.File,
+                              line: sourcecode.Line): Meta =
+      new Meta(fqn.value, file.value, line.value)
+  }
+  
+  final case class Err(msg: String)(implicit val meta: Meta)
+    extends Throwable with NoStackTrace
+~~~~~~~~
+
+We extend `Throwable` for maximum compatibility.
+
+Although `Err` is referentially transparent, the implicit construction of a
+`Meta` does **not** appear to be referentially transparent from a natural reading:
+two calls to `Meta.gen` (invoked implicitly when creating an `Err`) will produce
+different values because the location in the source code impacts the returned
+value:
+
+{lang="text"}
+~~~~~~~~
+  scala> println(Err("hello world").meta)
+  Meta(com.acme,<console>,10)
+  
+  scala> println(Err("hello world").meta)
+  Meta(com.acme,<console>,11)
+~~~~~~~~
+
+To understand this, we have to appreciate that `sourcecode.*` methods are macros
+that are generating source code for us. If we were to write the above explicitly
+it is clear what is happening:
+
+{lang="text"}
+~~~~~~~~
+  scala> println(Err("hello world")(Meta("com.acme", "<console>", 10)).meta)
+  Meta(com.acme,<console>,10)
+  
+  scala> println(Err("hello world")(Meta("com.acme", "<console>", 11)).meta)
+  Meta(com.acme,<console>,11)
+~~~~~~~~
+
+Yes, we've made a deal with the macro devil, but we could also write the `Meta`
+manually and have it go out of date quicker than our documentation.
+
+
+### `ReaderT`
+
+The reader monad wraps `A => F[B]` allowing a program `F[B]` to depend on a
+runtime value `A`. For those familiar with dependency injection, the reader
+monad is the FP equivalent of Spring or Guice's `@Inject`, without the XML and
+reflection.
+
+`ReaderT` is just an alias to another more generally useful data type named
+after the mathematician *Heinrich Kleisli*.
+
+{lang="text"}
+~~~~~~~~
+  type ReaderT[F[_], A, B] = Kleisli[F, A, B]
+  
+  final case class Kleisli[F[_], -A, B](run: A => F[B]) {
+    def dimap[C, D](f: C => A)(g: B => D)(implicit F: Functor[F]): Kleisli[F, C, D] =
+      Kleisli(c => F.map(run(f(c)))(g))
+  
+    def flatMapF[C](f: B => F[C])(implicit F: FlatMap[F]): Kleisli[F, A, C] = ...
+    ...
+  }
+~~~~~~~~
+
+The most common use for `ReaderT` is to provide environment information to a
+program. In `drone-dynamic-agents` we need access to the user's OAuth 2.0
+Refresh Token to be able to contact Google. The obvious thing is to load the
+`RefreshTokens` from disk on startup, and make every method take a
+`RefreshToken` parameter. In fact, this is such a common requirement that Martin
+Odersky has proposed [implicit functions](https://www.scala-lang.org/blog/2016/12/07/implicit-function-types.html) for Scala 3.
+
+Our application could have an algebra that provides the configuration when
+needed, e.g.
+
+{lang="text"}
+~~~~~~~~
+  trait ConfigReader[F[_]] {
+    def token: F[RefreshToken]
+  }
+~~~~~~~~
+
+We have reinvented `ApplicativeAsk`, the typeclass associated to `ReaderT`,
+where `.ask` is the same as our `.token`, and `E` is `RefreshToken`:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait ApplicativeAsk[F[_], E] {
+    def ask: F[E]
+  }
+~~~~~~~~
+
+A law of `ApplicativeAsk` is that the `E` cannot change between invocations, i.e.
+`ask >> ask === ask`. For our usecase, this is to say that the configuration is
+read once. If we decide later that we want to reload configuration every time we
+need it, e.g. allowing us to change the token without restarting the
+application, we can reintroduce `ConfigReader` which has no such law.
+
+In our OAuth 2.0 implementation we could first move the `Monad` evidence onto the
+methods:
+
+{lang="text"}
+~~~~~~~~
+  def bearer(refresh: RefreshToken)(implicit F: Monad[F]): F[BearerToken] =
+    for { ...
+~~~~~~~~
+
+and then refactor the `refresh` parameter to be part of the `Monad`
+
+{lang="text"}
+~~~~~~~~
+  def bearer(implicit F: Monad[F], A: ApplicativeAsk[F, RefreshToken]): F[BearerToken] =
+    for {
+      refresh <- A.ask
+~~~~~~~~
+
+Any parameter can be moved into the `ApplicativeAsk`. This is of most value to
+immediate callers when they simply want to thread through this information from
+above. With `ReaderT`, we can reserve `implicit` parameter blocks entirely for
+the use of typeclasses, reducing the mental burden of using Scala.
+
+`ApplicativeLocal` extends `ApplicativeAsk` with an additional method `.local`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait ApplicativeLocal[F[_], E] extends ApplicativeAsk[F, E] {
+    def local[A](f: E => E)(fa: F[A]): F[A]
+  }
+~~~~~~~~
+
+We can change `E` and run a program `fa` within that local context, returning to
+the original `E`. A use case for `.local` is to generate a "stack trace" that
+makes sense to our domain, giving us nested logging! Leaning on the `Meta` data
+structure from the previous section, we define a function to checkpoint:
+
+{lang="text"}
+~~~~~~~~
+  def traced[A](fa: F[A])(implicit F: ApplicativeLocal[F, List[Meta]]): F[A] =
+    F.local(Meta.gen :: _)(fa)
+~~~~~~~~
+
+and we can use it to wrap functions that operate in this context.
+
+{lang="text"}
+~~~~~~~~
+  def foo: F[Foo] = traced(getBar).flatMap(barToFoo)
+~~~~~~~~
+
+automatically passing through anything that is not explicitly traced.
+
+If we access `.ask` we can see the breadcrumb trail of exactly how we were
+called, without the distraction of bytecode implementation details. A
+referentially transparent stacktrace!
+
+A defensive programmer may wish to truncate the `List[Meta]` at a certain
+length to avoid the equivalent of a stack overflow.
+
+`.local` can also be used to keep track of contextual information that is
+directly relevant to the task at hand, like the number of spaces that must
+indent a line when pretty printing a human readable file format, bumping it by
+two spaces when we enter a nested structure.
+
+Finally, if we cannot request a `ApplicativeLocal` because our application does not
+provide one, we can always return a `ReaderT`
+
+{lang="text"}
+~~~~~~~~
+  def bearer(implicit F: Monad[F]): ReaderT[F, RefreshToken, BearerToken] =
+    ReaderT( token => for {
+    ...
+~~~~~~~~
+
+If a caller receives a `ReaderT`, and they have the `token` parameter to hand,
+they can call `access.run(token)` and get back an `F[BearerToken]`.
+
+Admittedly, since we don't have many callers, we should just revert to a regular
+function parameter. `ApplicativeAsk` is of most use when:
+
+1.  we may wish to refactor the code later to reload config
+2.  the value is not needed by intermediate callers
+3.  or, we want to locally scope some variable
+
+
+### `WriterT`
+
+The opposite to reading is writing. The `WriterT` monad transformer is typically
+for writing to a journal `L`
+
+{lang="text"}
+~~~~~~~~
+  final case class WriterT[F[_], L, V](run: F[(L, V)])
+~~~~~~~~
+
+There is not just one associated typeclass, but two!
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait FunctorTell[F[_], L] extends Functor[F] {
+    def tell(l: L): F[Unit]
+    def writer[A](a: A, l: L): F[A]
+  }
+  
+  @typeclass trait FunctorListen[F[_], L] extends FunctorTell[F, W] {
+    def listen[A](fa: F[A]): F[(A, L)]
+  }
+~~~~~~~~
+
+`FunctorTell` is for writing to the journal and `FunctorListen` is to recover it.
+
+The most obvious example is to use `MonadTell` for logging, or audit reporting.
+Reusing `Meta` from our error reporting we could imagine creating a log
+structure like
+
+{lang="text"}
+~~~~~~~~
+  sealed trait Log
+  final case class Debug(msg: String)(implicit m: Meta)   extends Log
+  final case class Info(msg: String)(implicit m: Meta)    extends Log
+  final case class Warning(msg: String)(implicit m: Meta) extends Log
+~~~~~~~~
+
+and use `List[Log]` as our journal type. We could change our OAuth2
+`authenticate` method to
+
+{lang="text"}
+~~~~~~~~
+  def debug(msg: String)(implicit m: Meta): List[Log] = List(Debug(msg))
+  
+  def authenticate: F[CodeToken] =
+    for {
+      callback <- user.start <* debug("started the webserver").tell
+      params   = AuthRequest(callback, config.scope, config.clientId)
+      url      = config.auth.withQuery(params.toUrlQuery)
+      _        <- user.open(url) <* debug(s"user visiting $url").tell
+      code     <- user.stop <* debug("stopped the webserver").tell
+    } yield code
+~~~~~~~~
+
+We could even combine this with the `ReaderT` traces and get structured logs.
+
+However, there is a strong argument that logging deserves its own algebra. The
+log level is often needed at the point of creation for performance reasons and
+writing out the logs is typically managed at the application level rather than
+something each component needs to be concerned about.
+
+The `L` in `WriterT` has a `Monoid`, allowing us to journal any kind of
+*monoidic* calculation as a secondary value along with our primary program. For
+example, counting the number of times we do something, building up an
+explanation of a calculation, or building up a `TradeTemplate` for a new trade
+while we price it.
+
+A popular specialisation of `WriterT` is when the monad is `Id`, meaning the
+underlying `run` value is just a simple tuple `(L, A)`.
+
+{lang="text"}
+~~~~~~~~
+  type Writer[L, A] = WriterT[Id, L, A]
+~~~~~~~~
+
+which allows us to let any value carry around a secondary monoidal calculation,
+without needing a context `F[_]`.
+
+In a nutshell, `WriterT` / `FunctorListen` is how to multi-task in FP.
+
+
