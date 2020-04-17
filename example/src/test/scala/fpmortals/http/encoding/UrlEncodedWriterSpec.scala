@@ -4,16 +4,23 @@
 package fpmortals
 package http.encoding
 
-import prelude._, S._, Z._
+import cats._, data._, implicits._
 
 import scala.Left
+import eu.timepit.refined.api._
 import eu.timepit.refined.refineV
 import eu.timepit.refined.auto._
 import eu.timepit.refined.string.Url
 
 import UrlEncodedWriter.ops._
 
+import fpmortals.prelude.Test
+
 final case class Foo(apple: String, bananas: Long, pears: String)
+object Foo {
+  implicit val urlEncodedWriter: UrlEncodedWriter[Foo] = UrlEncodedWriterMagnolia.gen
+  implicit val urlQueryWriter: UrlQueryWriter[Foo] = DerivedUrlQueryWriter.gen
+}
 
 class UrlEncodedWriterSpec extends Test {
   "UrlEncodedWriter".should("encode Strings").in {
@@ -35,7 +42,7 @@ class UrlEncodedWriterSpec extends Test {
   }
 
   it.should("encode stringy maps").in {
-    val stringy = IList(
+    val stringy = List(
       "apple"   -> "http://foo",
       "bananas" -> "10",
       "pears"   -> "%"

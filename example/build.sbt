@@ -9,6 +9,7 @@ scalacOptions in ThisBuild ++= Seq(
 libraryDependencies ++= Seq(
   "org.typelevel"        %% "simulacrum"      % "1.0.0",
   "org.typelevel"        %% "cats-core"       % "2.1.1",
+  "org.typelevel"        %% "cats-free"       % "2.1.1",
   "org.typelevel"        %% "mouse"           % "0.24",
   "org.typelevel"        %% "cats-mtl-core"   % "0.7.1",
   "org.typelevel"        %% "cats-effect"     % "2.1.2",

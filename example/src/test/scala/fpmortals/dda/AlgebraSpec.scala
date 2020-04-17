@@ -6,10 +6,13 @@ package dda
 package algebra
 
 import cats._, data._, implicits._
+import cats.effect._
+import cats.free._
 import cats.data.EitherK.{ leftc, rightc }
 
 import fpmortals.time.Epoch
-import fpmortals.prelude.Test.unimplemented
+import fpmortals.prelude.Test
+import Test.unimplemented
 
 object Demo {
   def todo[F[_]: Monad](M: Machines[F], D: Drone[F]): F[Int] =
@@ -23,16 +26,16 @@ object Demo {
   val program: Ctx[Int] = todo[Ctx](Machines.liftF, Drone.liftF)
 }
 
-object DummyDrone extends Drone[Task] {
-  def getAgents: Task[Int]  = unimplemented
-  def getBacklog: Task[Int] = Task(1)
+object DummyDrone extends Drone[IO] {
+  def getAgents: IO[Int]  = unimplemented
+  def getBacklog: IO[Int] = IO(1)
 }
-object DummyMachines extends Machines[Task] {
-  def getAlive: Task[MachineNode ==>> Epoch]      = Task(IMap.empty)
-  def getManaged: Task[NonEmptyList[MachineNode]] = unimplemented
-  def getTime: Task[Epoch]                        = unimplemented
-  def start(node: MachineNode): Task[Unit]        = unimplemented
-  def stop(node: MachineNode): Task[Unit]         = unimplemented
+object DummyMachines extends Machines[IO] {
+  def getAlive: IO[Map[MachineNode, Epoch]]     = IO(Map())
+  def getManaged: IO[NonEmptyList[MachineNode]] = unimplemented
+  def getTime: IO[Epoch]                        = unimplemented
+  def start(node: MachineNode): IO[Unit]        = unimplemented
+  def stop(node: MachineNode): IO[Unit]         = unimplemented
 }
 
 trait Batch[F[_]] {
@@ -46,17 +49,17 @@ object Batch {
       def start(nodes: NonEmptyList[MachineNode]): Free[F, Unit] =
         Free.liftF(I.inj(Start(nodes)))
     }
-  def liftA[F[_]](implicit I: Ast :<: F): Batch[FreeAp[F, ?]] =
-    new Batch[FreeAp[F, ?]] {
-      def start(nodes: NonEmptyList[MachineNode]): FreeAp[F, Unit] =
-        FreeAp.lift(I.inj(Start(nodes)))
-    }
+  // def liftA[F[_]](implicit I: Ast :<: F): Batch[FreeAp[F, ?]] =
+  //   new Batch[FreeAp[F, ?]] {
+  //     def start(nodes: NonEmptyList[MachineNode]): FreeAp[F, Unit] =
+  //       FreeAp.lift(I.inj(Start(nodes)))
+  //   }
 }
 
 object Monkeys {
   final case class S(
-    singles: IList[MachineNode],
-    batches: IList[NonEmptyList[MachineNode]]
+    singles: List[MachineNode],
+    batches: List[NonEmptyList[MachineNode]]
   ) {
     def addSingle(node: MachineNode): S =
       S(node :: singles, batches)
@@ -65,44 +68,44 @@ object Monkeys {
   }
 }
 
-final class AlgebraSpec extends Test with RTS {
+final class AlgebraSpec extends Test {
 
   // https://github.com/scalaz/scalaz/pull/1753
-  def or[F[_], G[_], H[_]](fg: F ~> G, hg: H ~> G): Coproduct[F, H, ?] ~> G =
-    λ[Coproduct[F, H, ?] ~> G](_.fold(fg, hg))
+  def or[F[_], G[_], H[_]](fg: F ~> G, hg: H ~> G): EitherK[F, H, ?] ~> G =
+    λ[EitherK[F, H, ?] ~> G](_.fold(fg, hg))
 
   "Free Algebra Interpreters".should("combine their powers").in {
-    val iD: Drone.Ast ~> Task         = Drone.interpreter(DummyDrone)
-    val iM: Machines.Ast ~> Task      = Machines.interpreter(DummyMachines)
-    val interpreter: Demo.Ast ~> Task = or(iM, iD)
+    val iD: Drone.Ast ~> IO         = Drone.interpreter(DummyDrone)
+    val iM: Machines.Ast ~> IO      = Machines.interpreter(DummyMachines)
+    val interpreter: Demo.Ast ~> IO = or(iM, iD)
 
-    unsafePerformIO(
-      Demo.program
-        .foldMap(interpreter)
-    ).shouldBe(1)
+    Demo.program
+      .foldMap(interpreter)
+      .unsafeRunSync()
+      .shouldBe(1)
   }
 
   it.should("support monitoring").in {
-    val iD: Drone.Ast ~> Task         = Drone.interpreter(DummyDrone)
-    val iM: Machines.Ast ~> Task      = Machines.interpreter(DummyMachines)
-    val interpreter: Demo.Ast ~> Task = or(iM, iD)
+    val iD: Drone.Ast ~> IO         = Drone.interpreter(DummyDrone)
+    val iM: Machines.Ast ~> IO      = Machines.interpreter(DummyMachines)
+    val interpreter: Demo.Ast ~> IO = or(iM, iD)
 
     var count = 0
     val Monitor = λ[Demo.Ast ~> Demo.Ast](
       _.run match {
-        case \/-(m @ Drone.GetBacklog()) =>
+        case Right(m @ Drone.GetBacklog()) =>
           count += 1
-          Coproduct.rightc(m)
+          EitherK.rightc(m)
         case other =>
-          Coproduct(other)
+          EitherK(other)
       }
     )
 
-    unsafePerformIO(
-      Demo.program
-        .mapSuspension(Monitor)
-        .foldMap(interpreter)
-    ).shouldBe(1)
+    Demo.program
+      .mapK(Monitor)
+      .foldMap(interpreter)
+      .unsafeRunSync()
+      .shouldBe(1)
 
     count.shouldBe(1)
   }
@@ -113,8 +116,8 @@ final class AlgebraSpec extends Test with RTS {
     val D: Drone.Ast ~> Id = stub[Int] {
       case Drone.GetBacklog() => 1
     }
-    val M: Machines.Ast ~> Id = stub[MachineNode ==>> Epoch] {
-      case Machines.GetAlive() => IMap.empty
+    val M: Machines.Ast ~> Id = stub[Map[MachineNode, Epoch]] {
+      case Machines.GetAlive() => Map()
     }
 
     Demo.program
@@ -123,9 +126,9 @@ final class AlgebraSpec extends Test with RTS {
   }
 
   it.should("support monkey patching part 1").in {
-    type S = ISet[MachineNode]
+    type S = Set[MachineNode]
     val M = Mocker.stubAny[Machines.Ast, State[S, ?]] {
-      case Machines.Stop(node) => State.modify[S](_.insert(node))
+      case Machines.Stop(node) => State.modify[S](_ + node)
     }
 
     val monkey = λ[Machines.Ast ~> Free[Machines.Ast, ?]] {
@@ -138,39 +141,40 @@ final class AlgebraSpec extends Test with RTS {
       .stop(MachineNode("#c0ffee"))
       .foldMap(monkey)
       .foldMap(M)
-      .exec(ISet.empty)
-      .shouldBe(ISet.empty)
+      .runS(Set())
+      .value
+      .shouldBe(Set())
   }
 
   it.should("batch calls without any crazy hacks").in {
-    type Orig[a] = Coproduct[Machines.Ast, Drone.Ast, a]
+    type Orig[a] = EitherK[Machines.Ast, Drone.Ast, a]
 
     // pretend this is the DynAgents.act method...
-    def act[F[_]: Applicative](M: Machines[F], @unused D: Drone[F])(
+    def act[F[_]: Applicative](M: Machines[F], D: Drone[F])(
       todo: Int
     ): F[Unit] =
-      (1 |-> todo).traverse(id => M.start(MachineNode(id.shows))).void
+      (1 to todo).toList.traverse(id => M.start(MachineNode(id.toString))).void
 
     val freeap = act(Machines.liftA[Orig], Drone.liftA[Orig])(2)
 
-    val gather = λ[Orig ~> λ[α => IList[MachineNode]]] {
-      case Coproduct(-\/(Machines.Start(node))) => IList.single(node)
-      case _                                    => IList.empty
+    val gather = λ[Orig ~> λ[α => List[MachineNode]]] {
+      case EitherK(Left(Machines.Start(node))) => List(node)
+      case _                                   => Nil
     }
 
-    type Extended[a] = Coproduct[Batch.Ast, Orig, a]
-    def batch(nodes: IList[MachineNode]): FreeAp[Extended, Unit] =
+    type Extended[a] = EitherK[Batch.Ast, Orig, a]
+    def batch(nodes: List[MachineNode]): FreeApplicative[Extended, Unit] =
       nodes.toNel match {
-        case None        => FreeAp.pure(())
-        case Some(nodes) => FreeAp.lift(Coproduct.leftc(Batch.Start(nodes)))
+        case None        => FreeApplicative.pure(())
+        case Some(nodes) => FreeApplicative.lift(EitherK.leftc(Batch.Start(nodes)))
       }
 
-    val nostart = λ[Orig ~> FreeAp[Extended, ?]] {
-      case Coproduct(-\/(Machines.Start(_))) => FreeAp.pure(())
-      case other                             => FreeAp.lift(Coproduct.rightc(other))
+    val nostart = λ[Orig ~> FreeApplicative[Extended, ?]] {
+      case EitherK(Left(Machines.Start(_))) => FreeApplicative.pure(())
+      case other                            => FreeApplicative.lift(EitherK.rightc(other))
     }
 
-    def optimise[A](orig: FreeAp[Orig, A]): FreeAp[Extended, A] =
+    def optimise[A](orig: FreeApplicative[Orig, A]): FreeApplicative[Extended, A] =
       (batch(orig.analyze(gather)) *> orig.foldMap(nostart))
 
     import Monkeys.S
@@ -187,12 +191,12 @@ final class AlgebraSpec extends Test with RTS {
 
     optimise(freeap)
       .foldMap(or(B, or(M, D)))
-      .run(S(IList.empty, IList.empty))
-      ._1
+      .runS(S(List(), List()))
+      .value
       .shouldBe(
         S(
-          IList.empty, // no singles
-          IList(NonEmptyList(MachineNode("2"), MachineNode("1")))
+          List(), // no singles
+          List(NonEmptyList.of(MachineNode("1"), MachineNode("2")))
         )
       )
 

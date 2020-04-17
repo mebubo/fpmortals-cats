@@ -6086,6 +6086,7 @@ In this chapter we will study some of the most important implementations of
 
 #+BEGIN_SRC scala
 libraryDependencies += "org.typelevel" %% "cats-mtl-core" % "0.7.1"
+libraryDependencies += "org.typelevel" %% "cats-free" % "2.1.1"
 libraryDependencies += "org.typelevel" %% "cats-effect" % "2.1.2"
 #+END_SRC
 
@@ -6093,10 +6094,11 @@ and the source snippets in this section assume that the following imports
 are being used
 
 #+BEGIN_SRC scala
-import cats._, cats.data._, cats.implicits._
+import cats._, data._, implicits._
+import cats.free._
+import cats.mtl._
 import cats.effect._
 import cats.effect.concurrent._
-import cats.mtl._
 import simulacrum._
 #+END_SRC
 
@@ -6932,7 +6934,7 @@ In a nutshell, =WriterT= / =FunctorListen= is how to multi-task in FP.
 
 **** =StateT=
 
-=StateT= lets us =.put=, =.get= and =.modify= a value that is handled by the
+=StateT= lets us =.set=, =.get= and =.modify= a value that is handled by the
 monadic context. It is the FP replacement of =var=.
 
 If we were to write an impure method that has access to some mutable state, held

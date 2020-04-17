@@ -4,16 +4,18 @@
 package fpmortals
 package http.encoding
 
-import prelude._, Z._
+import cats._, implicits._
 
 import UrlQueryWriter.ops._
+
+import fpmortals.prelude.Test
 
 class UrlQueryWriterSpec extends Test {
   "UrlQueryWriter"
     .should("encode case classes")
     .in(
       Foo("http://foo", 10, "%").toUrlQuery.params.shouldBe(
-        IList(
+        List(
           "apple"   -> "http://foo",
           "bananas" -> "10",
           "pears"   -> "%"

@@ -4,10 +4,13 @@
 package fpmortals
 package http.encoding
 
-import prelude._, Z._
+import cats._, implicits._
 
+import eu.timepit.refined.api._
 import eu.timepit.refined.auto._
 import eu.timepit.refined.string.Url
+
+import fpmortals.prelude.Test
 
 class UrlQuerySpec extends Test {
   import UrlQuery.ops._
@@ -20,7 +23,7 @@ class UrlQuerySpec extends Test {
         UrlQuery(
           ("blah"    -> "bloo") ::
             (" meh " -> "#") ::
-            IList.empty
+            Nil
         )
       )
       .value

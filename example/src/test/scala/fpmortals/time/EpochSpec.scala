@@ -4,7 +4,11 @@
 package fpmortals
 package time
 
-import prelude._, S._, Z._
+import cats._, implicits._
+
+import scala.concurrent.duration._
+
+import fpmortals.prelude.Test
 
 final class EpochSpec extends Test {
 
