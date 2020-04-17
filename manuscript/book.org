@@ -6396,12 +6396,11 @@ explain each of the transformers, why they are useful, and how they work.
 | journal / multitask  | ~F[(W, A)]~           | ~WriterT~   | ~FunctorListen~    |
 | evolving state       | ~S => F[(S, A)]~      | ~StateT~    | ~MonadState~       |
 | keep calm & carry on | ~F[Ior[E, A]]~        | ~IorT~      | ~MonadChronicle~   |
-| control flow         | ~(A => F[B]) => F[B]~ | ~ContT~     |                    |
 
 # https://www.slideshare.net/sukanthajra/classy-monad-transformers-stop-effing-around
 # https://www.youtube.com/watch?v=QtZJATIPB0k
 
-**** =.mapK= and =.liftF=
+**** =.mapK=, =.liftF= and =.liftK=
 
 It is typical that a transformer will implement methods named =.mapK= and
 =.liftF= having the following general pattern:
@@ -6413,6 +6412,7 @@ final case class OptionT[F[_], A](value: F[Option[A]]) {
 }
 object OptionT {
   def liftF[F[_]: Functor, A](fa: F[A]): OptionT[F, A] = ...
+  def liftK[F[_]: Functor]: F ~> OptionT[F, ?] = ...
   ...
 }
 
@@ -6422,6 +6422,7 @@ final case class EitherT[F[_], A, B](value: F[Either[A, B]]) {
 }
 object EitherT {
   def liftF[F[_]: Functor, A, B](fb: F[B]): EitherT[F, A, B] = ...
+  def liftK[F[_]: Functor, A]: F ~> EitherT[F, A, ?] = ...
   ...
 }
 #+END_SRC
@@ -6431,6 +6432,8 @@ object EitherT {
 =.liftF= lets us create a monad transformer if we have an =F[A]=. For example,
 we can create an =OptionT[IO, String]= by calling =OptionT.liftF= on an
 =IO[String]=, which we seen in Chapter 2.
+
+=.liftK= is the same as =.liftF= but returns a natural transformation.
 
 Generally, there are three ways to create a monad transformer:
 
@@ -6927,11 +6930,6 @@ without needing a context =F[_]=.
 
 In a nutshell, =WriterT= / =FunctorListen= is how to multi-task in FP.
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 **** =StateT=
 
 =StateT= lets us =.set=, =.get= and =.modify= a value that is handled by the
@@ -7024,13 +7022,6 @@ final case class World(
 )
 #+END_SRC
 
-#+BEGIN_ASIDE
-We have not yet rewritten the application to fully make use Scalaz data types
-and typeclasses, and we are still relying on stdlib collections. There is no
-urgency to update as this is straightforward and these types can be used in a
-pure FP manner.
-#+END_ASIDE
-
 The key difference being that the =started= and =stopped= nodes can be separated
 out. Our interpreter can be implemented in terms of =State[World, a]= and we can
 write our tests to assert on what both the =World= and =WorldView= looks like
@@ -7050,9 +7041,9 @@ object StateImpl {
   }
 
   private val M = new Machines[F] {
-    def getAlive: F[Map[MachineNode, Epoch]]   = get.map(_.alive)
+    def getAlive: F[Map[MachineNode, Epoch]]     = get.map(_.alive)
     def getManaged: F[NonEmptyList[MachineNode]] = get.map(_.managed)
-    def getTime: F[Epoch]                      = get.map(_.time)
+    def getTime: F[Epoch]                        = get.map(_.time)
 
     def start(node: MachineNode): F[Unit] =
       modify(w => w.copy(started = w.started + node))
@@ -7060,7 +7051,7 @@ object StateImpl {
       modify(w => w.copy(stopped = w.stopped + node))
   }
 
-  val program = new DynAgentsModule[F](D, M)
+  val program: DynAgents[F] = new DynAgentsModule[F](D, M)
 }
 #+END_SRC
 
@@ -7074,13 +7065,13 @@ and we can rewrite our tests to follow a convention where:
 For example,
 
 #+BEGIN_SRC scala
-  it should "request agents when needed" in {
-    val world1          = World(5, 0, managed, Map(), Set(), Set(), time1)
-    val view1           = WorldView(5, 0, managed, Map(), Map(), time1)
-
-    val (world2, view2) = StateImpl.program.act(view1).run(world1)
+  it.should("request agents when needed").in {
+    val world1          = hungry
+    val view1           = needsAgents
+    val (world2, view2) = act(view1).run(world1).value
 
     view2.shouldBe(view1.copy(pending = Map(node1 -> time1)))
+
     world2.stopped.shouldBe(world1.stopped)
     world2.started.shouldBe(Set(node1))
   }
@@ -7098,46 +7089,21 @@ while True:
 and use =StateT= to manage the =state=. However, our =DynAgents= business logic
 requires only =Applicative= and we would be violating the /Rule of Least Power/
 to require the more powerful =MonadState=. It is therefore entirely reasonable
-to handle the state manually by passing it in to =update= and =act=, and let
+to handle the state manually by passing it in to =.update= and =.act=, and let
 whoever calls us use a =StateT= if they wish.
 
 **** =IndexedStateT=
 
-The code that we have studied thus far is not how Scalaz implements =StateT=.
+The code that we have studied thus far is not how Cats implements =StateT=.
 Instead, a type alias points to =IndexedStateT=
 
 #+BEGIN_SRC scala
 type StateT[F[_], S, A] = IndexedStateT[F, S, S, A]
 #+END_SRC
 
-The implementation of =IndexedStateT= is much as we have studied, with an extra
-type parameter allowing the input state =S1= and output state =S2= to differ:
-
-#+BEGIN_SRC scala
-sealed abstract class IndexedStateT[F[_], -S1, S2, A] {
-  def run(initial: S1)(implicit F: Bind[F]): F[(S2, A)] = ...
-  ...
-}
-object IndexedStateT {
-  def apply[F[_], S1, S2, A](
-    f: S1 => F[(S2, A)]
-  ): IndexedStateT[F, S1, S2, A] = Wrap(f)
-
-  private final case class Wrap[F[_], S1, S2, A](
-    run: S1 => F[(S2, A)]
-  ) extends IndexedStateT[F, S1, S2, A]
-  private final case class FlatMap[F[_], S1, S2, S3, A, B](
-    a: IndexedStateT[F, S1, S2, A],
-    f: (S2, A) => IndexedStateT[F, S2, S3, B]
-  ) extends IndexedStateT[F, S1, S3, B]
-  ...
-}
-#+END_SRC
-
 ~IndexedStateT~ does not have a ~MonadState~ when ~S1 != S2~, although it has a
 ~Monad~.
 
-The following example is adapted from [[https://www.youtube.com/watch?v=JPVagd9W4Lo][Index your State]] by Vincent Marquez.
 Consider the scenario where we must design an algebraic interface for an =Int=
 to =String= lookup. This may have a networked implementation and the order of
 calls is essential. Our first attempt at the API may look something like:
@@ -7161,9 +7127,9 @@ state. First we define our possible states as an ADT
 
 #+BEGIN_SRC scala
   sealed abstract class Status
-  final case class Ready()                          extends Status
-  final case class Locked(on: ISet[Int])            extends Status
-  final case class Updated(values: Int ==>> String) extends Status
+  final case class Ready()                           extends Status
+  final case class Locked(on: Set[Int])              extends Status
+  final case class Updated(values: Map[Int, String]) extends Status
 #+END_SRC
 
 and then revisit our algebra
@@ -7172,9 +7138,9 @@ and then revisit our algebra
 trait Cache[M[_]] {
   type F[in, out, a] = IndexedStateT[M, in, out, a]
 
-  def read(k: Int): F[Ready, Ready, Maybe[String]]
-  def readLocked(k: Int): F[Locked, Locked, Maybe[String]]
-  def readUncommitted(k: Int): F[Updated, Updated, Maybe[String]]
+  def read(k: Int): F[Ready, Ready, Option[String]]
+  def readLocked(k: Int): F[Locked, Locked, Option[String]]
+  def readUncommitted(k: Int): F[Updated, Updated, Option[String]]
 
   def lock: F[Ready, Locked, Unit]
   def update(k: Int, v: String): F[Locked, Updated, Unit]
@@ -7191,7 +7157,7 @@ which will give a compiletime error if we try to =.update= without a =.lock=
       _  <- C.commit
     } yield a1
 
-[error]  found   : IndexedStateT[M,Locked,Ready,Maybe[String]]
+[error]  found   : IndexedStateT[M,Locked,Ready,Option[String]]
 [error]  required: IndexedStateT[M,Ready,?,?]
 [error]       _  <- C.update(13, "wibble")
 [error]          ^
@@ -7205,56 +7171,14 @@ including their state:
     for {
       _  <- C.lock
       a1 <- C.readLocked(13)
-      a2 = a1.cata(_ + "'", "wibble")
+      a2 = a1 match {
+        case None    => "wibble"
+        case Some(a) => a + "'"
+      }
       _  <- C.update(13, a2)
       _  <- C.commit
     } yield a2
 #+END_SRC
-
-#+BEGIN_ASIDE
-We introduced code duplication in our API when we defined multiple =.read=
-operations
-
-#+BEGIN_SRC scala
-  def read(k: Int): F[Ready, Ready, Maybe[String]]
-  def readLocked(k: Int): F[Locked, Locked, Maybe[String]]
-  def readUncommitted(k: Int): F[Updated, Updated, Maybe[String]]
-#+END_SRC
-
-Instead of
-
-#+BEGIN_SRC scala
-  def read[S <: Status](k: Int): F[S, S, Maybe[String]]
-#+END_SRC
-
-The reason we didn't do this is, /because subtyping/. This (broken) code would
-compile with the inferred type signature =F[Nothing, Ready, Maybe[String]]=
-
-#+BEGIN_SRC scala
-    for {
-      a1 <- C.read(13)
-      _  <- C.update(13, "wibble")
-      _  <- C.commit
-    } yield a1
-#+END_SRC
-
-Scala has a =Nothing= type which is the subtype of all other types. Thankfully,
-this code can not make it to runtime, as it would be impossible to call it, but
-it is a bad API since users need to remember to add type ascriptions.
-
-Another approach would be to stop the compiler from inferring =Nothing=. Scalaz
-provides implicit evidence to assert that a type is not inferred as =Nothing=
-and we can use it instead:
-
-#+BEGIN_SRC scala
-def read[S <: Status](k: Int)(implicit NN: NotNothing[S]): F[S, S, Maybe[String]]
-#+END_SRC
-
-# automated rewrite proposed in https://github.com/scalacenter/scalafix/issues/668
-
-The choice of which of the three alternative APIs to prefer is left to the
-personal taste of the API designer.
-#+END_ASIDE
 
 **** =IndexedReaderWriterStateT=
 
@@ -7263,518 +7187,84 @@ will not be disappointed. The transformer =IndexedReaderWriterStateT= wraps ~(R,
 S1) => F[(W, A, S2)]~ with ~R~ having =Reader= semantics, ~W~ for monoidic
 writes, and the ~S~ parameters for indexed state updates.
 
-#+BEGIN_SRC scala
-sealed abstract class IndexedReaderWriterStateT[F[_], -R, W, -S1, S2, A] {
-  def run(r: R, s: S1)(implicit F: Monad[F]): F[(W, A, S2)] = ...
-  ...
-}
-object IndexedReaderWriterStateT {
-  def apply[F[_], R, W, S1, S2, A](f: (R, S1) => F[(W, A, S2)]) = ...
-}
-
-type ReaderWriterStateT[F[_], -R, W, S, A] = IndexedReaderWriterStateT[F, R, W, S, S, A]
-object ReaderWriterStateT {
-  def apply[F[_], R, W, S, A](f: (R, S) => F[(W, A, S)]) = ...
-}
-#+END_SRC
-
-Abbreviations are provided because otherwise, let's be honest, these types are
-so long they look like they are part of a J2EE API:
+Abbreviations are provided for convenience:
 
 #+BEGIN_SRC scala
-type IRWST[F[_], -R, W, -S1, S2, A] = IndexedReaderWriterStateT[F, R, W, S1, S2, A]
+type IRWST[F[_], E, L, SA, SB, A] = IndexedReaderWriterStateT[F, E, L, SA, SB, A]
 val IRWST = IndexedReaderWriterStateT
-type RWST[F[_], -R, W, S, A] = ReaderWriterStateT[F, R, W, S, A]
+
+type RWST[F[_], E, L, S, A] = ReaderWriterStateT[F, E, L, S, A]
 val RWST = ReaderWriterStateT
 #+END_SRC
 
 =IRWST= is a more efficient implementation than a manually created transformer
 /stack/ of =ReaderT[WriterT[IndexedStateT[F, ...], ...], ...]=.
 
-**** =TheseT=
+**** =IorT=
 
-=TheseT= allows errors to either abort the calculation or to be accumulated if
+=IorT= allows errors to either abort the calculation or to be accumulated if
 there is some partial success. Hence /keep calm and carry on/.
 
-The underlying data type is =F[A \&/ B]= with =A= being the error type,
+The underlying data type is =F[Ior[A, B]]= with =A= being the error type,
 requiring a =Semigroup= to enable the accumulation of errors.
 
 # https://hackage.haskell.org/package/these-0.7.4/docs/Control-Monad-Chronicle.html#t:ChronicleT
 
 #+BEGIN_SRC scala
-final case class TheseT[F[_], A, B](run: F[A \&/ B])
-object TheseT {
-  def `this`[F[_]: Functor, A, B](a: F[A]): TheseT[F, A, B] = ...
-  def that[F[_]: Functor, A, B](b: F[B]): TheseT[F, A, B] = ...
-  def both[F[_]: Functor, A, B](ab: F[(A, B)]): TheseT[F, A, B] = ...
+final case class IorT[F[_], A, B](run: F[Ior[A, B]])
+object IorT {
+  def left[F[_]: Functor, A, B](a: F[A]): IorT[F, A, B] = ...
+  def right[F[_]: Functor, A, B](b: F[B]): IorT[F, A, B] = ...
+  def both[F[_]: Functor, A, B](ab: F[(A, B)]): IorT[F, A, B] = ...
 
-  implicit def monad[F[_]: Monad, A: Semigroup] = new Monad[TheseT[F, A, ?]] {
-    def bind[B, C](fa: TheseT[F, A, B])(f: B => TheseT[F, A, C]) =
-      TheseT(fa.run >>= {
-        case This(a) => a.wrapThis[C].point[F]
-        case That(b) => f(b).run
-        case Both(a, b) =>
-          f(b).run.map {
-            case This(a_)     => (a |+| a_).wrapThis[C]
-            case That(c_)     => Both(a, c_)
-            case Both(a_, c_) => Both(a |+| a_, c_)
-          }
-      })
-
-    def point[B](b: =>B) = TheseT(b.wrapThat.point[F])
-  }
+  def leftT[F[_]: Applicative, A, B](a: A): IorT[F, A, B] = ...
+  def rightT[F[_]: Applicative, A, B](b: B): IorT[F, A, B] = ...
+  def bothT[F[_]: Applicative, A, B](ab: (A, B)): IorT[F, A, B] = ...
+  ...
 }
 #+END_SRC
 
-There is no special monad associated with =TheseT=, it is just a regular
-=Monad=. If we wish to abort a calculation we can return a =This= value, but we
+If we wish to abort a calculation we can return a =Left= value, but we
 accumulate errors when we return a =Both= which also contains a successful part
 of the calculation.
 
-=TheseT= can also be thought of from a different angle: =A= does not need to be
+The accompanying monad is
+
+#+BEGIN_SRC scala
+trait MonadChronicle[F[_], E] {
+  def chronicle[A](ior: E Ior A): F[A]
+  def confess[A](c: E): F[A]
+
+  def materialize[A](fa: F[A]): F[E Ior A]
+  def memento[A](fa: F[A]): F[Either[E, A]]
+
+  def absolve[A](fa: F[A])(a: => A): F[A]
+  def condemn[A](fa: F[A]): F[A]
+  def retcon[A](fa: F[A])(cc: E => E): F[A]
+}
+#+END_SRC
+
+=.chronicle= and =.confess= are ways to construct a fresh =MonadChronicle=,
+complementing =.pure=.
+
+=.materialize= is similar to =MonadError.attempt= in that it surfaces any
+underlying errors. =.memento= has even greater similarity to =.attempt= in that
+it returns an =Either= which will be =Left= only if the underlying =Ior= is
+=Left=.
+
+=.absolve= erases any error data, using the provided value in the case that the
+underlying is a =Left=. =.condemn= coerces the =Both= into a =Left= by erasing
+the partial success, and =.retcon= applies a map to the errors.
+
+=IorT= can also be thought of from a different angle: =A= does not need to be
 an /error/. Similarly to =WriterT=, the =A= may be a secondary calculation that
-we are computing along with the primary calculation =B=. =TheseT= allows early
+we are computing along with the primary calculation =B=. =IorT= allows early
 exit when something special about =A= demands it, like when Charlie Bucket found
 the last golden ticket (=A=) he threw away his chocolate bar (=B=).
 
-**** =ContT=
-
-/Continuation Passing Style/ (CPS) is a style of programming where functions
-never return, instead /continuing/ to the next computation. CPS is popular in
-Javascript and Lisp as they allow non-blocking I/O via callbacks when data is
-available. A direct translation of the pattern into impure Scala looks like
-
-#+BEGIN_SRC scala
-def foo[I, A](input: I)(next: A => Unit): Unit = next(doSomeStuff(input))
-#+END_SRC
-
-We can make this pure by introducing an =F[_]= context
-
-#+BEGIN_SRC scala
-def foo[F[_], I, A](input: I)(next: A => F[Unit]): F[Unit]
-#+END_SRC
-
-and refactor to return a function for the provided input
-
-#+BEGIN_SRC scala
-def foo[F[_], I, A](input: I): (A => F[Unit]) => F[Unit]
-#+END_SRC
-
-=ContT= is just a container for this signature, with a =Monad= instance
-
-#+BEGIN_SRC scala
-final case class ContT[F[_], B, A](_run: (A => F[B]) => F[B]) {
-  def run(f: A => F[B]): F[B] = _run(f)
-}
-object IndexedContT {
-  implicit def monad[F[_], B] = new Monad[ContT[F, B, ?]] {
-    def point[A](a: =>A) = ContT(_(a))
-    def bind[A, C](fa: ContT[F, B, A])(f: A => ContT[F, B, C]) =
-      ContT(c_fb => fa.run(a => f(a).run(c_fb)))
-  }
-}
-#+END_SRC
-
-and convenient syntax to create a =ContT= from a monadic value:
-
-#+BEGIN_SRC scala
-implicit class ContTOps[F[_]: Monad, A](self: F[A]) {
-  def cps[B]: ContT[F, B, A] = ContT(a_fb => self >>= a_fb)
-}
-#+END_SRC
-
-However, the simple callback use of continuations brings nothing to pure
-functional programming because we already know how to sequence non-blocking,
-potentially distributed, computations: that is what =Monad= is for and we can do
-this with =.bind= or a =Kleisli= arrow. To see why continuations are useful we
-need to consider a more complex example under a rigid design constraint.
-
-***** Control Flow
-
-Say we have modularised our application into components that can perform I/O,
-with each component owned by a different development team:
-
-#+BEGIN_SRC scala
-  final case class A0()
-  final case class A1()
-  final case class A2()
-  final case class A3()
-  final case class A4()
-
-  def bar0(a4: A4): IO[A0] = ...
-  def bar2(a1: A1): IO[A2] = ...
-  def bar3(a2: A2): IO[A3] = ...
-  def bar4(a3: A3): IO[A4] = ...
-#+END_SRC
-
-Our goal is to produce an =A0= given an =A1=. Whereas Javascript and Lisp would
-reach for continuations to solve this problem (because the I/O could block) we
-can just chain the functions
-
-#+BEGIN_SRC scala
-  def simple(a: A1): IO[A0] = bar2(a) >>= bar3 >>= bar4 >>= bar0
-#+END_SRC
-
-We can lift =.simple= into its continuation form by using the convenient =.cps=
-syntax and a little bit of extra boilerplate for each step:
-
-#+BEGIN_SRC scala
-  def foo1(a: A1): ContT[IO, A0, A2] = bar2(a).cps
-  def foo2(a: A2): ContT[IO, A0, A3] = bar3(a).cps
-  def foo3(a: A3): ContT[IO, A0, A4] = bar4(a).cps
-
-  def flow(a: A1): IO[A0]  = (foo1(a) >>= foo2 >>= foo3).run(bar0)
-#+END_SRC
-
-So what does this buy us? Firstly, it is worth noting that the control flow of
-this application is left to right
-
-#+BEGIN_SRC dot :cmd dot :file images/contt-simple.png :exports results
-digraph G {
-    graph [dpi=300,rankdir=LR];
-    node [fontname=Hack];
-    edge [fontname=Hack];
-    fontname=Hack;
-    compound=true;
-
-    start [shape=point,width=0.1]
-    end [shape=point,width=0.1]
-
-    subgraph cluster_foo1 {
-      label="foo1";
-      bar2 [shape=rectangle];
-    }
-    subgraph cluster_foo2 {
-      label="foo2";
-      bar3 [shape=rectangle];
-    }
-    subgraph cluster_foo3 {
-      label="foo3";
-      bar4 [shape=rectangle];
-    }
-    bar0 [shape=rectangle];
-
-    start -> bar2 [label="a1"]
-    bar2 -> bar3 [label="a2"];
-    bar3 -> bar4 [label="a3"];
-    bar4 -> bar0 [label="a4"];
-    bar0 -> end [label="a0"];
-}
-#+End_SRC
-
-#+CAPTION: 60
-#+RESULTS:
-[[file:images/contt-simple.png]]
-
-What if we are the authors of =foo2= and we want to post-process the =a0= that
-we receive from the right (downstream), i.e. we want to split our =foo2= into
-=foo2a= and =foo2b=
-
-#+BEGIN_SRC dot :cmd dot :file images/contt-process1.png :exports results
-digraph G {
-    graph [dpi=300,rankdir=LR];
-    node [fontname=Hack];
-    edge [fontname=Hack];
-    fontname=Hack;
-    compound=true;
-
-    start [shape=point,width=0.1]
-    end [shape=point,width=0.1]
-
-    subgraph cluster_foo1 {
-      label="foo1";
-      bar2 [shape=rectangle];
-    }
-    subgraph cluster_foo2a {
-      label="foo2a";
-      bar3 [shape=rectangle];
-    }
-    subgraph cluster_foo3 {
-      label="foo3";
-      bar4 [shape=rectangle];
-    }
-    subgraph cluster_foo2b {
-      label="foo2b";
-      process [shape=rectangle];
-    }
-    bar0 [shape=rectangle];
-
-    start -> bar2 [label="a1"]
-    bar2 -> bar3 [label="a2"];
-    bar3 -> bar4 [label="a3"];
-    bar4 -> bar0 [label="a4"];
-    bar0 -> process [label="a0"];
-    process -> end [label="a0"];
-}
-#+End_SRC
-
-#+CAPTION: 75
-#+RESULTS:
-[[file:images/contt-process1.png]]
-
-Add the constraint that we cannot change the definition of =flow= or =bar0=.
-Perhaps it is not our code and is defined by the framework we are using.
-
-It is not possible to process the output of =a0= by modifying any of the
-remaining =barX= methods. However, with =ContT= we can modify =foo2= to process
-the result of the =next= continuation:
-
-#+BEGIN_SRC dot :cmd dot :file images/contt-process2.png :exports results
-digraph G {
-    graph [dpi=300,rankdir=LR];
-    node [fontname=Hack];
-    edge [fontname=Hack];
-    fontname=Hack;
-    #compound=true;
-    #overlap = false;
-
-    start [shape=point,width=0.1]
-
-    subgraph cluster_foo1 {
-      label="foo1";
-      bar2 [shape=rectangle];
-    }
-    subgraph cluster_foo2 {
-      label="foo2";
-      bar3 [shape=rectangle];
-      process [shape=rectangle];
-    }
-    subgraph cluster_foo3 {
-      label="foo3";
-      bar4 [shape=rectangle];
-    }
-
-    bar0 [shape=rectangle];
-    end [shape=point,width=0.1];
-
-    start -> bar2 [label="a1"]
-    bar2 -> bar3 [label="a2"];
-    bar3:e -> bar4:w [label="a3"];
-    bar4:s -> bar0:s [label="a4"];
-    bar0 -> process [label="a0"];
-
-    process:e -> end:w [label="a0"];
-
-    # pushes end one out to the right
-    hidden1 [style=invis];
-    hidden1 -> end [style=invis];
-}
-#+End_SRC
-
-#+CAPTION: 45
-#+RESULTS:
-[[file:images/contt-process2.png]]
-
-Which can be defined with
-
-#+BEGIN_SRC scala
-  def foo2(a: A2): ContT[IO, A0, A3] = ContT { next =>
-    for {
-      a3  <- bar3(a)
-      a0  <- next(a3)
-    } yield process(a0)
-  }
-#+END_SRC
-
-We are not limited to =.map= over the return value, we can =.bind= into another
-control flow turning the linear flow into a graph!
-
-#+BEGIN_SRC dot :cmd dot :file images/contt-elsewhere.png :exports results
-digraph G {
-    graph [dpi=300,rankdir=LR];
-    node [fontname=Hack];
-    edge [fontname=Hack];
-    fontname=Hack;
-    #compound=true;
-    #overlap = false;
-
-    start [shape=point,width=0.1]
-
-    subgraph cluster_foo1 {
-      label="foo1";
-      bar2 [shape=rectangle];
-    }
-    subgraph cluster_foo2 {
-      label="foo2";
-      bar3 [shape=rectangle];
-      check [shape=rectangle];
-      # cheating by hiding another bar0 to keep it tidy
-    }
-    subgraph cluster_foo3 {
-      label="foo3";
-      bar4 [shape=rectangle];
-    }
-    subgraph cluster_elsewhere {
-      label="elsewhere";
-      elsewhere [label="???",shape=rectangle];
-    }
-
-    bar0 [label="bar0",shape=rectangle];
-    end [shape=point,width=0.1];
-
-    start -> bar2 [label="a1"];
-    bar2 -> bar3 [label="a2"];
-    bar3 -> bar4 [label="a3"];
-    bar4 -> bar0 [label="a4"];
-
-    # don't show the label, it is noisy
-    bar0 -> check; #[label="a0"];
-    check -> end [label="a0"];
-    check -> elsewhere;
-    elsewhere -> end [label="a0"];
-
-    # pushes end one out to the right
-    bar2 -> bar0 [style=invis];
-#    hidden1 [style=invis];
-#    hidden1 -> end [style=invis];
-#    hidden1 -> hidden2 [style=invis];
-#    hidden2 [style=invis];
-#    hidden2 -> bar0 [style=invis];
-}
-#+End_SRC
-
-#+CAPTION: 50
-#+RESULTS:
-[[file:images/contt-elsewhere.png]]
-
-#+BEGIN_SRC scala
-  def elsewhere: ContT[IO, A0, A4] = ???
-  def foo2(a: A2): ContT[IO, A0, A3] = ContT { next =>
-    for {
-      a3  <- bar3(a)
-      a0  <- next(a3)
-      a0_ <- if (check(a0)) a0.pure[IO]
-             else elsewhere.run(bar0)
-    } yield a0_
-  }
-#+END_SRC
-
-Or we can stay within the original flow and retry everything downstream
-
-#+BEGIN_SRC dot :cmd dot :file images/contt-retry.png :exports results
-digraph G {
-    graph [dpi=300,rankdir=LR];
-    node [fontname=Hack];
-    edge [fontname=Hack];
-    fontname=Hack;
-    #compound=true;
-    #overlap = false;
-
-    start [shape=point,width=0.1]
-
-    subgraph cluster_foo1 {
-      label="foo1";
-      bar2 [shape=rectangle];
-    }
-    subgraph cluster_foo2 {
-      label="foo2";
-      bar3 [shape=rectangle];
-      check [shape=rectangle];
-      # cheating by hiding another bar0 to keep it tidy
-    }
-    subgraph cluster_foo3 {
-      label="foo3";
-      bar4 [shape=rectangle];
-    }
-
-    bar0 [label="bar0",shape=rectangle];
-    end [shape=point,width=0.1];
-
-    start -> bar2 [label="a1"];
-    bar2 -> bar3 [label="a2"];
-    bar3 -> bar4 [label="a3"];
-    bar4 -> bar0 [label="a4"];
-
-    bar0 -> check; #[label="a0"];
-    check -> end [label="a0"];
-    check -> bar4 [label="a3"];
-
-    # pushes end one out to the right
-    bar2 -> bar0 [style=invis];
-}
-#+End_SRC
-
-#+CAPTION: 45
-#+RESULTS:
-[[file:images/contt-retry.png]]
-
-#+BEGIN_SRC scala
-  def foo2(a: A2): ContT[IO, A0, A3] = ContT { next =>
-    for {
-      a3  <- bar3(a)
-      a0  <- next(a3)
-      a0_ <- if (check(a0)) a0.pure[IO]
-             else next(a3)
-    } yield a0_
-  }
-#+END_SRC
-
-This is just one retry, not an infinite loop. For example, we might want
-downstream to reconfirm a potentially dangerous action.
-
-Finally, we can perform actions that are specific to the context of the =ContT=,
-in this case =IO= which lets us do error handling and resource cleanup:
-
-#+BEGIN_SRC scala
-  def foo2(a: A2): ContT[IO, A0, A3] = bar3(a).ensuring(cleanup).cps
-#+END_SRC
-
-***** When to Order Spaghetti
-
-It is not an accident that these diagrams look like spaghetti, that is just what
-happens when we start messing with control flow. All the mechanisms we've
-discussed in this section are simple to implement directly if we can edit the
-definition of =flow=, therefore we do not typically need to use =ContT=.
-
-However, if we are designing a framework, we should consider exposing the plugin
-system as =ContT= callbacks to allow our users more power over their control
-flow. Sometimes the customer just really wants the spaghetti.
-
-For example, if the Scala compiler was written using CPS, it would allow for a
-principled approach to communication between compiler phases. A compiler plugin
-would be able to perform some action based on the inferred type of an
-expression, computed at a later stage in the compile. Similarly, continuations
-would be a good API for an extensible build tool or text editor.
-
-# https://www.microsoft.com/en-us/research/wp-content/uploads/2016/11/compiling-without-continuations.pdf
-
-A caveat with =ContT= is that it is not stack safe, so cannot be used for
-programs that run forever.
-
-***** Great, kid. Don't get =ContT=.
-
-A more complex variant of ~ContT~ called ~IndexedContT~ wraps ~(A => F[B]) =>
-F[C]~. The new type parameter ~C~ allows the return type of the entire
-computation to be different to the return type between each component. But if
-~B~ is not equal to ~C~ then there is no ~Monad~.
-
-Not missing an opportunity to generalise as much as possible, =IndexedContT= is
-actually implemented in terms of an even more general structure (note the extra
-=s= before the =T=)
-
-#+BEGIN_SRC scala
-final case class IndexedContsT[W[_], F[_], C, B, A](_run: W[A => F[B]] => F[C])
-
-type IndexedContT[f[_], c, b, a] = IndexedContsT[Id, f, c, b, a]
-type ContT[f[_], b, a]           = IndexedContsT[Id, f, b, b, a]
-type ContsT[w[_], f[_], b, a]    = IndexedContsT[w, f, b, b, a]
-type Cont[b, a]                  = IndexedContsT[Id, Id, b, b, a]
-#+END_SRC
-
-where =W[_]= has a =Comonad=, and =ContT= is actually implemented as a type
-alias. Companion objects exist for these type aliases with convenient
-constructors.
-
-Admittedly, five type parameters is perhaps a generalisation too far. But then
-again, over-generalisation is consistent with the sensibilities of
-continuations.
-
-# https://github.com/scalaz/scalaz/issues/1737
-# http://www.haskellforall.com/2012/12/the-continuation-monad.html
-
 **** Transformer Stacks and Ambiguous Implicits
 
-This concludes our tour of the monad transformers in Scalaz.
+This concludes our tour of the monad transformers in Cats.
 
 When multiple transformers are combined, we call this a /transformer stack/ and
 although it is verbose, it is possible to read off the features by reading the
@@ -7790,162 +7280,20 @@ we know that we are adding error handling with error type =E= (there is a
 S]=).
 
 But there are unfortunately practical drawbacks to using monad transformers and
-their companion =Monad= typeclasses:
+their companion typeclasses:
 
-1. Multiple implicit =Monad= parameters mean that the compiler cannot find the
-   correct syntax to use for the context.
-
-2. Monads do not compose in the general case, which means that the order of
+1. Monads do not compose in the general case, which means that the order of
    nesting of the transformers is important.
 
-3. All the interpreters must be lifted into the common context. For example, we
+2. All the interpreters must be lifted into the common context. For example, we
    might have an implementation of some algebra that uses for =IO= and now we
    need to wrap it with =StateT= and =EitherT= even though they are unused
    inside the interpreter.
 
-4. There is a performance cost associated to each layer. And some monad
+3. There is a performance cost associated to each layer. And some monad
    transformers are worse than others. =StateT= is particularly bad but even
    =EitherT= can cause memory allocation problems for high throughput
    applications.
-
-We need to talk about workarounds.
-
-***** No Syntax
-
-Say we have an algebra
-
-#+BEGIN_SRC scala
-trait Lookup[F[_]] {
-  def look: F[Int]
-}
-#+END_SRC
-
-and some data types
-
-#+BEGIN_SRC scala
-final case class Problem(bad: Int)
-final case class Table(last: Int)
-#+END_SRC
-
-that we want to use in our business logic
-
-#+BEGIN_SRC scala
-  def foo[F[_]](L: Lookup[F])(
-    implicit
-      E: MonadError[F, Problem],
-      S: MonadState[F, Table]
-  ): F[Int] = for {
-    old <- S.get
-    i   <- L.look
-    _   <- if (i === old.last) E.raiseError(Problem(i))
-           else ().pure[F]
-  } yield i
-#+END_SRC
-
-The first problem we encounter is that this fails to compile
-
-#+BEGIN_SRC
-[error] value flatMap is not a member of type parameter F[Table]
-[error]     old <- S.get
-[error]              ^
-#+END_SRC
-
-There are some tactical solutions to this problem. The most obvious is to make
-all the parameters explicit
-
-#+BEGIN_SRC scala
-  def foo1[F[_]: Monad](
-    L: Lookup[F],
-    E: MonadError[F, Problem],
-    S: MonadState[F, Table]
-  ): F[Int] = ...
-#+END_SRC
-
-and require only =Monad= to be passed implicitly via context bounds. However,
-this means that we must manually wire up the =MonadError= and =MonadState= when
-calling =foo1= and when calling out to another method that requires an
-=implicit=.
-
-A second solution is to leave the parameters =implicit= and use name shadowing
-to make all but one of the parameters explicit. This allows upstream to use
-implicit resolution when calling us but we still need to pass parameters
-explicitly if we call out.
-
-#+BEGIN_SRC scala
-  @inline final def shadow[A, B, C](a: A, b: B)(f: (A, B) => C): C = f(a, b)
-
-  def foo2a[F[_]: Monad](L: Lookup[F])(
-    implicit
-    E: MonadError[F, Problem],
-    S: MonadState[F, Table]
-  ): F[Int] = shadow(E, S) { (E, S) => ...
-#+END_SRC
-
-or we could shadow just one =Monad=, leaving the other one to provide our syntax
-and to be available for when we call out to other methods
-
-#+BEGIN_SRC scala
-  @inline final def shadow[A, B](a: A)(f: A => B): B = f(a)
-  ...
-
-  def foo2b[F[_]](L: Lookup[F])(
-    implicit
-    E: MonadError[F, Problem],
-    S: MonadState[F, Table]
-  ): F[Int] = shadow(E) { E => ...
-#+END_SRC
-
-A third option, with a higher up-front cost, is to create a custom =Monad=
-typeclass that holds =implicit= references to the two =Monad= classes that we
-care about
-
-#+BEGIN_SRC scala
-trait MonadErrorState[F[_], E, S] {
-  implicit def E: MonadError[F, E]
-  implicit def S: MonadState[F, S]
-}
-#+END_SRC
-
-and a derivation of the typeclass given a =MonadError= and =MonadState=
-
-#+BEGIN_SRC scala
-object MonadErrorState {
-  implicit def create[F[_], E, S](
-    implicit
-      E0: MonadError[F, E],
-      S0: MonadState[F, S]
-  ) = new MonadErrorState[F, E, S] {
-    def E: MonadError[F, E] = E0
-    def S: MonadState[F, S] = S0
-  }
-}
-#+END_SRC
-
-Now if we want access to =S= or =E= we get them via =F.S= or =F.E=
-
-#+BEGIN_SRC scala
-  def foo3a[F[_]: Monad](L: Lookup[F])(
-    implicit F: MonadErrorState[F, Problem, Table]
-  ): F[Int] =
-    for {
-      old <- F.S.get
-      i   <- L.look
-      _ <- if (i === old.last) F.E.raiseError(Problem(i))
-      else ().pure[F]
-    } yield i
-#+END_SRC
-
-Like the second solution, we can choose one of the =Monad= instances to be
-=implicit= within the block, achieved by importing it
-
-#+BEGIN_SRC scala
-  def foo3b[F[_]](L: Lookup[F])(
-    implicit F: MonadErrorState[F, Problem, Table]
-  ): F[Int] = {
-    import F.E
-    ...
-  }
-#+END_SRC
 
 ***** Composing Transformers
 
@@ -7961,16 +7309,26 @@ chapter presenting transformers in increasing order of complex.
 
 ***** Lifting Interpreters
 
-Continuing the same example, let's say our =Lookup= algebra has an =IO=
-interpreter
+Say we have a =Lookup= algebra and an =IO= interpreter
 
 #+BEGIN_SRC scala
+trait Lookup[F[_]] {
+  def look: F[Int]
+}
+
 object LookupRandom extends Lookup[IO] {
   def look: IO[Int] = IO { util.Random.nextInt }
 }
 #+END_SRC
 
-but we want our context to be
+and some data types
+
+#+BEGIN_SRC scala
+final case class Problem(bad: Int)
+final case class Table(last: Int)
+#+END_SRC
+
+However, rather than =IO=, we want our context to be
 
 #+BEGIN_SRC scala
 type Ctx[A] = StateT[EitherT[IO, Problem, ?], Table, A]
@@ -7979,102 +7337,96 @@ type Ctx[A] = StateT[EitherT[IO, Problem, ?], Table, A]
 to give us a =MonadError= and a =MonadState=. This means we need to wrap
 =LookupRandom= to operate over =Ctx=.
 
-#+BEGIN_ASIDE
-The odds of getting the types correct on the first attempt are approximately
-3,720 to one.
-#+END_ASIDE
-
-Firstly, we want to make use of the =.liftM= syntax on =Monad=, which uses
-=MonadTrans= to lift from our starting =F[A]= into =G[F, A]=
+There are two parts to this. Firstly, we need to implement a =.mapK= for our
+algebra, much like we seen for =OptionT= and =EitherT=
 
 #+BEGIN_SRC scala
-final class MonadOps[F[_]: Monad, A](fa: F[A]) {
-  def liftM[G[_[_], _]: MonadTrans]: G[F, A] = ...
-  ...
+trait Lookup[F[_]] { self =>
+  def look: F[Int]
+
+  def mapK[G[_]](f: F ~> G): Lookup[G] = new Lookup[G] {
+    def look: G[Int] = f(self.look)
+  }
 }
 #+END_SRC
 
-It is important to realise that the type parameters to =.liftM= have two type
-holes, one of shape =_[_]= and another of shape =_=. If we create type aliases
-of this shape
+which is a general pattern that we can follow for any algebra.
+
+#+BEGIN_ASIDE
+The [[https://typelevel.org/cats-tagless][=cats-tagless=]] macro can automatically generate =.mapK= for an algebra.
+#+END_ASIDE
+
+Then we need to implement a natural transformation =IO ~> Ctx=
 
 #+BEGIN_SRC scala
-  type Ctx0[F[_], A] = StateT[EitherT[F, Problem, ?], Table, A]
-  type Ctx1[F[_], A] = EitherT[F, Problem, A]
-  type Ctx2[F[_], A] = StateT[F, Table, A]
+def liftK: IO ~> Ctx = ...
 #+END_SRC
 
-We can abstract over =MonadTrans= to lift a =Lookup[F]= to any =Lookup[G[F, ?]]=
-where =G= is a Monad Transformer:
+Ideally we would be able to compose the =.liftK= provided by the two transformers
 
 #+BEGIN_SRC scala
-  def liftM[F[_]: Monad, G[_[_], _]: MonadTrans](f: Lookup[F]) =
-    new Lookup[G[F, ?]] {
-      def look: G[F, Int] = f.look.liftM[G]
-    }
+def liftK: IO ~> Ctx = StateT.liftK compose EitherT.liftK
 #+END_SRC
 
-Allowing us to wrap once for =EitherT=, and then again for =StateT=
+but unfortunately the compiler is unable to infer the types.
+
+A workaround is to introduce an intermediate type to give a hint
 
 #+BEGIN_SRC scala
-  val wrap1 = Lookup.liftM[IO, Ctx1](LookupRandom)
-  val wrap2: Lookup[Ctx] = Lookup.liftM[EitherT[IO, Problem, ?], Ctx2](wrap1)
+  def liftK: IO ~> Ctx = {
+    type Ctx1[A] = EitherT[IO, Problem, A]
+    val first : IO ~> Ctx1 = EitherT.liftK
+    val second : Ctx1 ~> Ctx = StateT.liftK
+    second.compose(first)
+  }
 #+END_SRC
 
-Another way to achieve this, in a single step, is to use =MonadIO= which enables
+Now we can create a =Lookup[Ctx]= by mapping over the lifter
+
+#+BEGIN_SRC scala
+  val L: Lookup[Ctx] = LookupRandom.mapK(liftK)
+#+END_SRC
+
+Another way to achieve this, in a single step, is to use =LiftIO= which enables
 lifting an =IO= into a transformer stack:
 
 #+BEGIN_SRC scala
-@typeclass trait MonadIO[F[_]] extends Monad[F] {
+@typeclass trait LiftIO[F[_]] {
   def liftIO[A](ioa: IO[A]): F[A]
 }
 #+END_SRC
 
-with =MonadIO= instances for all the common combinations of transformers.
+=LiftIO= instances are provided for all the common combinations of transformers.
 
-The boilerplate overhead to lift an =IO= interpreter to anything with a
-=MonadIO= instance is therefore two lines of code (for the interpreter
-definition), plus one line per element of the algebra, and a final line to call
-it:
+The following helper
 
 #+BEGIN_SRC scala
-  def liftIO[F[_]: MonadIO](io: Lookup[IO]) = new Lookup[F] {
-    def look: F[Int] = io.look.liftIO[F]
-  }
-
-  val L: Lookup[Ctx] = Lookup.liftIO(LookupRandom)
+def liftIoK[F[_]](implicit L: LiftIO[F]): IO ~> F = FunctionK.lift(L.liftIO)
 #+END_SRC
 
-#+BEGIN_ASIDE
-A compiler plugin that automatically produces =.liftM=, =.liftIO=, and
-additional boilerplate that arises in this chapter, would be a great
-contribution to the ecosystem!
-#+END_ASIDE
+may be used as the natural transformation instead of the one that we composed
+manually from composed =.liftK= calls
 
-# https://github.com/kailuowang/mainecoon is almost what we need, but not quite
-
-# From Fabio
-# https://hackage.haskell.org/package/layers-0.1/docs/Documentation-Layers-Overview.html
+#+BEGIN_SRC scala
+val L: Lookup[Ctx] = LookupRandom.mapK(liftIoK)
+#+END_SRC
 
 ***** Performance
 
 The biggest problem with Monad Transformers is their performance overhead.
 =EitherT= has a reasonably low overhead, with every =.flatMap= call generating a
 handful of objects, but this can impact high throughput applications where every
-object allocation matters. Other transformers, such as =StateT=, effectively add
-a trampoline, and =ContT= keeps the entire call-chain retained in memory.
+object allocation matters.
 
 #+BEGIN_ASIDE
 Some applications do not care about allocations if they are bounded by network
 or I/O. Always measure.
 #+END_ASIDE
 
-If performance becomes a problem, the solution is to not use Monad Transformers.
-At least not the transformer data structures. A big advantage of the =Monad=
-typeclasses, like =MonadState= is that we can create an optimised =F[_]= for our
-application that provides the typeclasses naturally. We will learn how to create
-an optimal =F[_]= over the next two chapters, when we deep dive into two
-structures which we have already seen: =Free= and =IO=.
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** A Free Lunch
 
@@ -9420,13 +8772,13 @@ It would be prudent to isolate the construction of all such instances to the
 application's entrypoint.
 #+END_ASIDE
 
-***** =MonadIO=
+***** =LiftIO=
 
-The =MonadIO= that we previously studied was simplified to hide the =E=
+The =LiftIO= that we previously studied was simplified to hide the =E=
 parameter. The actual typeclass is
 
 #+BEGIN_SRC scala
-trait MonadIO[M[_], E] {
+trait LiftIO[M[_], E] {
   def liftIO[A](io: IO[E, A])(implicit M: Monad[M]): M[A]
 }
 #+END_SRC
@@ -9439,7 +8791,7 @@ trait Lookup[F[_]] {
   def look: F[Int]
 }
 object Lookup {
-  def liftIO[F[_]: Monad, E](io: Lookup[IO[E, ?]])(implicit M: MonadIO[F, E]) =
+  def liftIO[F[_]: Monad, E](io: Lookup[IO[E, ?]])(implicit M: LiftIO[F, E]) =
     new Lookup[F] {
       def look: F[Int] = M.liftIO(io.look)
     }
@@ -12779,13 +12131,13 @@ different context
 final class BlazeJsonClient[F[_]](H: Client[Task])(
   implicit
   F: MonadError[F, JsonClient.Error],
-  I: MonadIO[F, Throwable]
+  I: LiftIO[F, Throwable]
 ) extends JsonClient[F] { ... }
 object BlazeJsonClient {
   def apply[F[_]](
     implicit
     F: MonadError[F, JsonClient.Error],
-    I: MonadIO[F, Throwable]
+    I: LiftIO[F, Throwable]
   ): Task[JsonClient[F]] = ...
 }
 #+END_SRC
@@ -12796,7 +12148,7 @@ mutable connection pools are created and managed internally by http4s.
 
 #+BEGIN_ASIDE
 =OAuth2JsonClientModule= requires a =MonadState= and =BlazeJsonClient= requires
-=MonadError= and =MonadIO=. Our application's context will now likely be the
+=MonadError= and =LiftIO=. Our application's context will now likely be the
 combination of both:
 
 #+BEGIN_SRC scala
@@ -13182,7 +12534,7 @@ import JsonClient.Error
 final class BlazeJsonClient[F[_]] private (H: Client[Task])(
   implicit
   F: MonadError[F, Error],
-  I: MonadIO[F, Throwable]
+  I: LiftIO[F, Throwable]
 ) extends JsonClient[F] {
   ...
   def handler[A: JsDecoder](resp: http4s.Response[Task]): Task[Error \/ A] = {
@@ -13228,7 +12580,7 @@ This is our implementation of =.get=
 =.get= is all plumbing: we convert our input types into the =http4s.Request=,
 then call =.fetch= on the =Client= with our =handler=. This gives us back a
 =Task[Error \/ A]=, but we need to return a =F[A]=. Therefore we use the
-=MonadIO.liftIO= to create a =F[Error \/ A]= and then =.emap= to push the error
+=LiftIO.liftIO= to create a =F[Error \/ A]= and then =.emap= to push the error
 into the =F=.
 
 Unfortunately, if we try to compile this code it will fail. The error will look
@@ -13297,7 +12649,7 @@ object BlazeJsonClient {
   def apply[F[_]](
     implicit
     F: MonadError[F, JsonClient.Error],
-    I: MonadIO[F, Throwable]
+    I: LiftIO[F, Throwable]
   ): Task[JsonClient[F]] =
     Http1Client(BlazeClientConfig.defaultConfig).map(new BlazeJsonClient(_))
 }

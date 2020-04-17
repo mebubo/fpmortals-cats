@@ -5133,12 +5133,27 @@ Cats ecosystem.
 # Cats Monads
 
 In this chapter we will study some of the most important implementations of
-`Monad` and in particular those that are provided by the `cats-mtl` library
-which can be installed with
+`Monad` and in particular those that are provided by the `cats-mtl` and
+`cats-effect` libraries which can be installed with
 
 {lang="text"}
 ~~~~~~~~
   libraryDependencies += "org.typelevel" %% "cats-mtl-core" % "0.7.1"
+  libraryDependencies += "org.typelevel" %% "cats-free" % "2.1.1"
+  libraryDependencies += "org.typelevel" %% "cats-effect" % "2.1.2"
+~~~~~~~~
+
+and the source snippets in this section assume that the following imports
+are being used
+
+{lang="text"}
+~~~~~~~~
+  import cats._, data._, implicits._
+  import cats.free._
+  import cats.mtl._
+  import cats.effect._
+  import cats.effect.concurrent._
+  import simulacrum._
 ~~~~~~~~
 
 
@@ -5429,18 +5444,17 @@ This subset of data types and extensions to `Monad` are often referred to as the
 *Monad Transformer Library* (MTL), summarised below. In this section, we will
 explain each of the transformers, why they are useful, and how they work.
 
-| Effect               | Underlying            | Transformer | Typeclass          |
-|-------------------- |--------------------- |----------- |------------------ |
-| optionality          | `F[Option[A]]`        | `OptionT`   |                    |
-| errors               | `F[Either[E, A]]`     | `EitherT`   | `MonadError`       |
-| a runtime value      | `A => F[B]`           | `ReaderT`   | `ApplicativeLocal` |
-| journal / multitask  | `F[(W, A)]`           | `WriterT`   | `FunctorListen`    |
-| evolving state       | `S => F[(S, A)]`      | `StateT`    | `MonadState`       |
-| keep calm & carry on | `F[Ior[E, A]]`        | `IorT`      | `MonadChronicle`   |
-| control flow         | `(A => F[B]) => F[B]` | `ContT`     |                    |
+| Effect               | Underlying        | Transformer | Typeclass          |
+|-------------------- |----------------- |----------- |------------------ |
+| optionality          | `F[Option[A]]`    | `OptionT`   |                    |
+| errors               | `F[Either[E, A]]` | `EitherT`   | `MonadError`       |
+| a runtime value      | `A => F[B]`       | `ReaderT`   | `ApplicativeLocal` |
+| journal / multitask  | `F[(W, A)]`       | `WriterT`   | `FunctorListen`    |
+| evolving state       | `S => F[(S, A)]`  | `StateT`    | `MonadState`       |
+| keep calm & carry on | `F[Ior[E, A]]`    | `IorT`      | `MonadChronicle`   |
 
 
-### `.mapK` and `.liftF`
+### `.mapK`, `.liftF` and `.liftK`
 
 It is typical that a transformer will implement methods named `.mapK` and
 `.liftF` having the following general pattern:
@@ -5453,6 +5467,7 @@ It is typical that a transformer will implement methods named `.mapK` and
   }
   object OptionT {
     def liftF[F[_]: Functor, A](fa: F[A]): OptionT[F, A] = ...
+    def liftK[F[_]: Functor]: F ~> OptionT[F, ?] = ...
     ...
   }
   
@@ -5462,6 +5477,7 @@ It is typical that a transformer will implement methods named `.mapK` and
   }
   object EitherT {
     def liftF[F[_]: Functor, A, B](fb: F[B]): EitherT[F, A, B] = ...
+    def liftK[F[_]: Functor, A]: F ~> EitherT[F, A, ?] = ...
     ...
   }
 ~~~~~~~~
@@ -5471,6 +5487,8 @@ It is typical that a transformer will implement methods named `.mapK` and
 `.liftF` lets us create a monad transformer if we have an `F[A]`. For example,
 we can create an `OptionT[IO, String]` by calling `OptionT.liftF` on an
 `IO[String]`, which we seen in Chapter 2.
+
+`.liftK` is the same as `.liftF` but returns a natural transformation.
 
 Generally, there are three ways to create a monad transformer:
 
@@ -5999,5 +6017,527 @@ which allows us to let any value carry around a secondary monoidal calculation,
 without needing a context `F[_]`.
 
 In a nutshell, `WriterT` / `FunctorListen` is how to multi-task in FP.
+
+
+### `StateT`
+
+`StateT` lets us `.set`, `.get` and `.modify` a value that is handled by the
+monadic context. It is the FP replacement of `var`.
+
+If we were to write an impure method that has access to some mutable state, held
+in a `var`, it might have the signature `() => F[A]` and return a different
+value on every call, breaking referential transparency. With pure FP the
+function takes the state as input and returns the updated state as output, which
+is why the underlying type of `StateT` is `S => F[(S, A)]`.
+
+The associated monad is `MonadState`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait MonadState[F[_], S] extends Monad[F] {
+    def get: F[S]
+    def set(s: S): F[Unit]
+  
+    def modify(f: S => S): F[Unit]
+    ...
+  }
+~~~~~~~~
+
+A> `S` must be an immutable type: `.modify` is not an escape hatch to update a
+A> mutable data structure. Mutability is impure and is only allowed within an `IO`
+A> block.
+
+A common variant of `StateT` is when `F = Eval`, giving the underlying type
+signature `S => (S, A)`. Cats provides a type alias and convenience functions
+for interacting with the `State` monad transformer directly, and mirroring
+`MonadState`:
+
+{lang="text"}
+~~~~~~~~
+  type State[a] = StateT[Eval, a]
+  object State {
+    def apply[S, A](f: S => (S, A)): State[S, A] = StateT[Id, S, A](f)
+    def pure[S, A](a: A): State[S, A] = State((_, a))
+  
+    def get[S]: State[S, S] = State(s => (s, s))
+    def set[S](s: S): State[S, Unit] = State(_ => (s, ()))
+    def modify[S](f: S => S): State[S, Unit] = ...
+    ...
+  }
+~~~~~~~~
+
+For an example we can return to the business logic tests of
+`drone-dynamic-agents`. Recall from Chapter 3 that we created `Mutable` as test
+interpreters for our application and we stored the number of `started` and
+`stoped` nodes in `var`.
+
+{lang="text"}
+~~~~~~~~
+  class Mutable(state: WorldView) {
+    var started, stopped: Int = 0
+  
+    implicit val drone: Drone[Id] = new Drone[Id] { ... }
+    implicit val machines: Machines[Id] = new Machines[Id] { ... }
+    val program = new DynAgentsModule[Id]
+  }
+~~~~~~~~
+
+We now know that we can write a much better test simulator with `State`. We will
+take the opportunity to upgrade the accuracy of the simulation at the same time.
+Recall that a core domain object is our application's view of the world:
+
+{lang="text"}
+~~~~~~~~
+  final case class WorldView(
+    backlog: Int,
+    agents: Int,
+    managed: NonEmptyList[MachineNode],
+    alive: Map[MachineNode, Epoch],
+    pending: Map[MachineNode, Epoch],
+    time: Epoch
+  )
+~~~~~~~~
+
+Since we're writing a simulation of the world for our tests, we can create a
+data type that captures the ground truth of everything
+
+{lang="text"}
+~~~~~~~~
+  final case class World(
+    backlog: Int,
+    agents: Int,
+    managed: NonEmptyList[MachineNode],
+    alive: Map[MachineNode, Epoch],
+    started: Set[MachineNode],
+    stopped: Set[MachineNode],
+    time: Epoch
+  )
+~~~~~~~~
+
+The key difference being that the `started` and `stopped` nodes can be separated
+out. Our interpreter can be implemented in terms of `State[World, a]` and we can
+write our tests to assert on what both the `World` and `WorldView` looks like
+after the business logic has run.
+
+The interpreters, which are mocking out contacting external Drone and Google
+services, may be implemented like this:
+
+{lang="text"}
+~~~~~~~~
+  import State.{ get, modify }
+  object StateImpl {
+    type F[a] = State[World, a]
+  
+    private val D = new Drone[F] {
+      def getBacklog: F[Int] = get.map(_.backlog)
+      def getAgents: F[Int]  = get.map(_.agents)
+    }
+  
+    private val M = new Machines[F] {
+      def getAlive: F[Map[MachineNode, Epoch]]     = get.map(_.alive)
+      def getManaged: F[NonEmptyList[MachineNode]] = get.map(_.managed)
+      def getTime: F[Epoch]                        = get.map(_.time)
+  
+      def start(node: MachineNode): F[Unit] =
+        modify(w => w.copy(started = w.started + node))
+      def stop(node: MachineNode): F[Unit] =
+        modify(w => w.copy(stopped = w.stopped + node))
+    }
+  
+    val program: DynAgents[F] = new DynAgentsModule[F](D, M)
+  }
+~~~~~~~~
+
+and we can rewrite our tests to follow a convention where:
+
+-   `world1` is the state of the world before running the program
+-   `view1` is the application's belief about the world
+-   `world2` is the state of the world after running the program
+-   `view2` is the application's belief after running the program
+
+For example,
+
+{lang="text"}
+~~~~~~~~
+  it.should("request agents when needed").in {
+    val world1          = hungry
+    val view1           = needsAgents
+    val (world2, view2) = act(view1).run(world1).value
+  
+    view2.shouldBe(view1.copy(pending = Map(node1 -> time1)))
+  
+    world2.stopped.shouldBe(world1.stopped)
+    world2.started.shouldBe(Set(node1))
+  }
+~~~~~~~~
+
+We would be forgiven for looking back to our business logic loop
+
+{lang="text"}
+~~~~~~~~
+  state = initial()
+  while True:
+    state = update(state)
+    state = act(state)
+~~~~~~~~
+
+and use `StateT` to manage the `state`. However, our `DynAgents` business logic
+requires only `Applicative` and we would be violating the *Rule of Least Power*
+to require the more powerful `MonadState`. It is therefore entirely reasonable
+to handle the state manually by passing it in to `.update` and `.act`, and let
+whoever calls us use a `StateT` if they wish.
+
+
+### `IndexedStateT`
+
+The code that we have studied thus far is not how Cats implements `StateT`.
+Instead, a type alias points to `IndexedStateT`
+
+{lang="text"}
+~~~~~~~~
+  type StateT[F[_], S, A] = IndexedStateT[F, S, S, A]
+~~~~~~~~
+
+`IndexedStateT` does not have a `MonadState` when `S1 != S2`, although it has a
+`Monad`.
+
+Consider the scenario where we must design an algebraic interface for an `Int`
+to `String` lookup. This may have a networked implementation and the order of
+calls is essential. Our first attempt at the API may look something like:
+
+{lang="text"}
+~~~~~~~~
+  trait Cache[F[_]] {
+    def read(k: Int): F[Maybe[String]]
+  
+    def lock: F[Unit]
+    def update(k: Int, v: String): F[Unit]
+    def commit: F[Unit]
+  }
+~~~~~~~~
+
+with runtime errors if `.update` or `.commit` is called without a `.lock`. A
+more complex design may involve multiple traits and a custom DSL that nobody
+remembers how to use.
+
+Instead, we can use `IndexedStateT` to require that the caller is in the correct
+state. First we define our possible states as an ADT
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Status
+  final case class Ready()                           extends Status
+  final case class Locked(on: Set[Int])              extends Status
+  final case class Updated(values: Map[Int, String]) extends Status
+~~~~~~~~
+
+and then revisit our algebra
+
+{lang="text"}
+~~~~~~~~
+  trait Cache[M[_]] {
+    type F[in, out, a] = IndexedStateT[M, in, out, a]
+  
+    def read(k: Int): F[Ready, Ready, Option[String]]
+    def readLocked(k: Int): F[Locked, Locked, Option[String]]
+    def readUncommitted(k: Int): F[Updated, Updated, Option[String]]
+  
+    def lock: F[Ready, Locked, Unit]
+    def update(k: Int, v: String): F[Locked, Updated, Unit]
+    def commit: F[Updated, Ready, Unit]
+  }
+~~~~~~~~
+
+which will give a compiletime error if we try to `.update` without a `.lock`
+
+{lang="text"}
+~~~~~~~~
+  for {
+        a1 <- C.read(13)
+        _  <- C.update(13, "wibble")
+        _  <- C.commit
+      } yield a1
+  
+  [error]  found   : IndexedStateT[M,Locked,Ready,Option[String]]
+  [error]  required: IndexedStateT[M,Ready,?,?]
+  [error]       _  <- C.update(13, "wibble")
+  [error]          ^
+~~~~~~~~
+
+but allowing us to construct functions that can be composed by explicitly
+including their state:
+
+{lang="text"}
+~~~~~~~~
+  def wibbleise[M[_]: Monad](C: Cache[M]): F[Ready, Ready, String] =
+    for {
+      _  <- C.lock
+      a1 <- C.readLocked(13)
+      a2 = a1 match {
+        case None    => "wibble"
+        case Some(a) => a + "'"
+      }
+      _  <- C.update(13, a2)
+      _  <- C.commit
+    } yield a2
+~~~~~~~~
+
+
+### `IndexedReaderWriterStateT`
+
+Those wanting to have a combination of `ReaderT`, `WriterT` and `IndexedStateT`
+will not be disappointed. The transformer `IndexedReaderWriterStateT` wraps `(R,
+S1) => F[(W, A, S2)]` with `R` having `Reader` semantics, `W` for monoidic
+writes, and the `S` parameters for indexed state updates.
+
+Abbreviations are provided for convenience:
+
+{lang="text"}
+~~~~~~~~
+  type IRWST[F[_], E, L, SA, SB, A] = IndexedReaderWriterStateT[F, E, L, SA, SB, A]
+  val IRWST = IndexedReaderWriterStateT
+  
+  type RWST[F[_], E, L, S, A] = ReaderWriterStateT[F, E, L, S, A]
+  val RWST = ReaderWriterStateT
+~~~~~~~~
+
+`IRWST` is a more efficient implementation than a manually created transformer
+*stack* of `ReaderT[WriterT[IndexedStateT[F, ...], ...], ...]`.
+
+
+### `IorT`
+
+`IorT` allows errors to either abort the calculation or to be accumulated if
+there is some partial success. Hence *keep calm and carry on*.
+
+The underlying data type is `F[Ior[A, B]]` with `A` being the error type,
+requiring a `Semigroup` to enable the accumulation of errors.
+
+{lang="text"}
+~~~~~~~~
+  final case class IorT[F[_], A, B](run: F[Ior[A, B]])
+  object IorT {
+    def left[F[_]: Functor, A, B](a: F[A]): IorT[F, A, B] = ...
+    def right[F[_]: Functor, A, B](b: F[B]): IorT[F, A, B] = ...
+    def both[F[_]: Functor, A, B](ab: F[(A, B)]): IorT[F, A, B] = ...
+  
+    def leftT[F[_]: Applicative, A, B](a: A): IorT[F, A, B] = ...
+    def rightT[F[_]: Applicative, A, B](b: B): IorT[F, A, B] = ...
+    def bothT[F[_]: Applicative, A, B](ab: (A, B)): IorT[F, A, B] = ...
+    ...
+  }
+~~~~~~~~
+
+If we wish to abort a calculation we can return a `Left` value, but we
+accumulate errors when we return a `Both` which also contains a successful part
+of the calculation.
+
+The accompanying monad is
+
+{lang="text"}
+~~~~~~~~
+  trait MonadChronicle[F[_], E] {
+    def chronicle[A](ior: E Ior A): F[A]
+    def confess[A](c: E): F[A]
+  
+    def materialize[A](fa: F[A]): F[E Ior A]
+    def memento[A](fa: F[A]): F[Either[E, A]]
+  
+    def absolve[A](fa: F[A])(a: => A): F[A]
+    def condemn[A](fa: F[A]): F[A]
+    def retcon[A](fa: F[A])(cc: E => E): F[A]
+  }
+~~~~~~~~
+
+`.chronicle` and `.confess` are ways to construct a fresh `MonadChronicle`,
+complementing `.pure`.
+
+`.materialize` is similar to `MonadError.attempt` in that it surfaces any
+underlying errors. `.memento` has even greater similarity to `.attempt` in that
+it returns an `Either` which will be `Left` only if the underlying `Ior` is
+`Left`.
+
+`.absolve` erases any error data, using the provided value in the case that the
+underlying is a `Left`. `.condemn` coerces the `Both` into a `Left` by erasing
+the partial success, and `.retcon` applies a map to the errors.
+
+`IorT` can also be thought of from a different angle: `A` does not need to be
+an *error*. Similarly to `WriterT`, the `A` may be a secondary calculation that
+we are computing along with the primary calculation `B`. `IorT` allows early
+exit when something special about `A` demands it, like when Charlie Bucket found
+the last golden ticket (`A`) he threw away his chocolate bar (`B`).
+
+
+### Transformer Stacks and Ambiguous Implicits
+
+This concludes our tour of the monad transformers in Cats.
+
+When multiple transformers are combined, we call this a *transformer stack* and
+although it is verbose, it is possible to read off the features by reading the
+transformers. For example if we construct an `F[_]` context which is a set of
+composed transformers, such as
+
+{lang="text"}
+~~~~~~~~
+  type Ctx[A] = StateT[EitherT[IO, E, ?], S, A]
+~~~~~~~~
+
+we know that we are adding error handling with error type `E` (there is a
+`MonadError[Ctx, E]`) and we are managing state `S` (there is a `MonadState[Ctx,
+S]`).
+
+But there are unfortunately practical drawbacks to using monad transformers and
+their companion typeclasses:
+
+1.  Monads do not compose in the general case, which means that the order of
+    nesting of the transformers is important.
+
+2.  All the interpreters must be lifted into the common context. For example, we
+    might have an implementation of some algebra that uses for `IO` and now we
+    need to wrap it with `StateT` and `EitherT` even though they are unused
+    inside the interpreter.
+
+3.  There is a performance cost associated to each layer. And some monad
+    transformers are worse than others. `StateT` is particularly bad but even
+    `EitherT` can cause memory allocation problems for high throughput
+    applications.
+
+
+#### Composing Transformers
+
+An `EitherT[StateT[...], ...]` has a `MonadError` but does not have a
+`MonadState`, whereas `StateT[EitherT[...], ...]` can provide both.
+
+The workaround is to study the implicit derivations on the companion of the
+transformers and to make sure that the outer most transformer provides
+everything we need.
+
+A rule of thumb is that more complex transformers go on the outside, with this
+chapter presenting transformers in increasing order of complex.
+
+
+#### Lifting Interpreters
+
+Say we have a `Lookup` algebra and an `IO` interpreter
+
+{lang="text"}
+~~~~~~~~
+  trait Lookup[F[_]] {
+    def look: F[Int]
+  }
+  
+  object LookupRandom extends Lookup[IO] {
+    def look: IO[Int] = IO { util.Random.nextInt }
+  }
+~~~~~~~~
+
+and some data types
+
+{lang="text"}
+~~~~~~~~
+  final case class Problem(bad: Int)
+  final case class Table(last: Int)
+~~~~~~~~
+
+However, rather than `IO`, we want our context to be
+
+{lang="text"}
+~~~~~~~~
+  type Ctx[A] = StateT[EitherT[IO, Problem, ?], Table, A]
+~~~~~~~~
+
+to give us a `MonadError` and a `MonadState`. This means we need to wrap
+`LookupRandom` to operate over `Ctx`.
+
+There are two parts to this. Firstly, we need to implement a `.mapK` for our
+algebra, much like we seen for `OptionT` and `EitherT`
+
+{lang="text"}
+~~~~~~~~
+  trait Lookup[F[_]] { self =>
+    def look: F[Int]
+  
+    def mapK[G[_]](f: F ~> G): Lookup[G] = new Lookup[G] {
+      def look: G[Int] = f(self.look)
+    }
+  }
+~~~~~~~~
+
+which is a general pattern that we can follow for any algebra.
+
+A> The [`cats-tagless`](https://typelevel.org/cats-tagless) macro can automatically generate `.mapK` for an algebra.
+
+Then we need to implement a natural transformation `IO ~> Ctx`
+
+{lang="text"}
+~~~~~~~~
+  def liftK: IO ~> Ctx = ...
+~~~~~~~~
+
+Ideally we would be able to compose the `.liftK` provided by the two transformers
+
+{lang="text"}
+~~~~~~~~
+  def liftK: IO ~> Ctx = StateT.liftK compose EitherT.liftK
+~~~~~~~~
+
+but unfortunately the compiler is unable to infer the types.
+
+A workaround is to introduce an intermediate type to give a hint
+
+{lang="text"}
+~~~~~~~~
+  def liftK: IO ~> Ctx = {
+    type Ctx1[A] = EitherT[IO, Problem, A]
+    val first : IO ~> Ctx1 = EitherT.liftK
+    val second : Ctx1 ~> Ctx = StateT.liftK
+    second.compose(first)
+  }
+~~~~~~~~
+
+Now we can create a `Lookup[Ctx]` by mapping over the lifter
+
+{lang="text"}
+~~~~~~~~
+  val L: Lookup[Ctx] = LookupRandom.mapK(liftK)
+~~~~~~~~
+
+Another way to achieve this, in a single step, is to use `LiftIO` which enables
+lifting an `IO` into a transformer stack:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait LiftIO[F[_]] {
+    def liftIO[A](ioa: IO[A]): F[A]
+  }
+~~~~~~~~
+
+`LiftIO` instances are provided for all the common combinations of transformers.
+
+The following helper
+
+{lang="text"}
+~~~~~~~~
+  def liftIoK[F[_]](implicit L: LiftIO[F]): IO ~> F = FunctionK.lift(L.liftIO)
+~~~~~~~~
+
+may be used as the natural transformation instead of the one that we composed
+manually from composed `.liftK` calls
+
+{lang="text"}
+~~~~~~~~
+  val L: Lookup[Ctx] = LookupRandom.mapK(liftIoK)
+~~~~~~~~
+
+
+#### Performance
+
+The biggest problem with Monad Transformers is their performance overhead.
+`EitherT` has a reasonably low overhead, with every `.flatMap` call generating a
+handful of objects, but this can impact high throughput applications where every
+object allocation matters.
+
+A> Some applications do not care about allocations if they are bounded by network
+A> or I/O. Always measure.
 
 

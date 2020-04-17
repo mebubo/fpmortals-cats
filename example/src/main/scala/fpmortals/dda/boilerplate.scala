@@ -15,19 +15,6 @@ package algebra {
   private[algebra] abstract class DroneBoilerplate {
     this: Drone.type =>
 
-    // def liftIO[F[_]: Monad, E](
-    //   io: Drone[IO[E, ?]]
-    // )(implicit M: MonadIO[F, E]): Drone[F] =
-    //   new Drone[F] {
-    //     def getBacklog: F[Int] = M.liftIO(io.getBacklog)
-    //     def getAgents: F[Int]  = M.liftIO(io.getAgents)
-    //   }
-
-    // def liftTask[F[_]: Monad](
-    //   io: Drone[Task]
-    // )(implicit M: MonadIO[F, Throwable]): Drone[F] =
-    //   liftIO[F, Throwable](io)
-
     sealed abstract class Ast[A]
     case class GetBacklog() extends Ast[Int]
     case class GetAgents()  extends Ast[Int]
@@ -59,32 +46,6 @@ package algebra {
 
   private[algebra] abstract class MachinesBoilerlate {
     this: Machines.type =>
-
-    // def liftM[F[_]: Monad, G[_[_], _]: MonadTrans](
-    //   f: Machines[F]
-    // ): Machines[G[F, ?]] =
-    //   new Machines[G[F, ?]] {
-    //     def getTime: G[F, Epoch]                        = f.getTime.liftM[G]
-    //     def getManaged: G[F, NonEmptyList[MachineNode]] = f.getManaged.liftM[G]
-    //     def getAlive: G[F, MachineNode ==>> Epoch]      = f.getAlive.liftM[G]
-    //     def start(node: MachineNode): G[F, Unit]        = f.start(node).liftM[G]
-    //     def stop(node: MachineNode): G[F, Unit]         = f.stop(node).liftM[G]
-    //   }
-
-    // def liftIO[F[_]: Monad, E](
-    //   io: Machines[IO[E, ?]]
-    // )(implicit M: MonadIO[F, E]): Machines[F] = new Machines[F] {
-    //   def getTime: F[Epoch]                        = M.liftIO(io.getTime)
-    //   def getManaged: F[NonEmptyList[MachineNode]] = M.liftIO(io.getManaged)
-    //   def getAlive: F[MachineNode ==>> Epoch]      = M.liftIO(io.getAlive)
-    //   def start(node: MachineNode): F[Unit]        = M.liftIO(io.start(node))
-    //   def stop(node: MachineNode): F[Unit]         = M.liftIO(io.stop(node))
-    // }
-
-    // def liftTask[F[_]: Monad](
-    //   io: Machines[Task]
-    // )(implicit M: MonadIO[F, Throwable]): Machines[F] =
-    //   liftIO[F, Throwable](io)
 
     sealed abstract class Ast[A]
     case class GetTime()                extends Ast[Epoch]
@@ -146,24 +107,6 @@ package algebra {
 package logic {
   private[logic] abstract class DynAgentsBoilerplate {
     this: DynAgents.type =>
-
-    // def liftM[F[_]: Monad, G[_[_], _]: MonadTrans](
-    //   f: DynAgents[F]
-    // ): DynAgents[G[F, ?]] =
-    //   new DynAgents[G[F, ?]] {
-    //     def initial: G[F, WorldView]                = f.initial.liftM[G]
-    //     def update(old: WorldView): G[F, WorldView] = f.update(old).liftM[G]
-    //     def act(world: WorldView): G[F, WorldView]  = f.act(world).liftM[G]
-    //   }
-
-    // def liftIO[F[_]: Monad, E](
-    //   io: DynAgents[IO[E, ?]]
-    // )(implicit M: MonadIO[F, E]): DynAgents[F] =
-    //   new DynAgents[F] {
-    //     def initial: F[WorldView]                = M.liftIO(io.initial)
-    //     def update(old: WorldView): F[WorldView] = M.liftIO(io.update(old))
-    //     def act(world: WorldView): F[WorldView]  = M.liftIO(io.act(world))
-    //   }
 
     // def liftTask[F[_]: Monad](
     //   io: DynAgents[Task]
