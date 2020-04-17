@@ -4983,14 +4983,14 @@ wrapped version of `.act`
   final class Monitored[U[_]: Functor](program: DynAgents[U]) {
     type F[a] = Const[Set[MachineNode], a]
     private val D = new Drone[F] {
-      def getBacklog: F[Int] = Const(Set.empty)
-      def getAgents: F[Int]  = Const(Set.empty)
+      def getBacklog: F[Int] = Const(Set())
+      def getAgents: F[Int]  = Const(Set())
     }
     private val M = new Machines[F] {
-      def getAlive: F[Map[MachineNode, Epoch]]     = Const(Set.empty)
-      def getManaged: F[NonEmptyList[MachineNode]] = Const(Set.empty)
-      def getTime: F[Epoch]                        = Const(Set.empty)
-      def start(node: MachineNode): F[Unit]        = Const(Set.empty)
+      def getAlive: F[Map[MachineNode, Epoch]]     = Const(Set())
+      def getManaged: F[NonEmptyList[MachineNode]] = Const(Set())
+      def getTime: F[Epoch]                        = Const(Set())
+      def start(node: MachineNode): F[Unit]        = Const(Set())
       def stop(node: MachineNode): F[Unit]         = Const(Set(node))
     }
     val monitor = new DynAgentsModule[F](D, M)
@@ -6539,5 +6539,699 @@ object allocation matters.
 
 A> Some applications do not care about allocations if they are bounded by network
 A> or I/O. Always measure.
+
+
+## A Free Lunch
+
+Our industry craves safe high-level languages, trading developer efficiency and
+reliability for reduced runtime performance.
+
+The Just In Time (JIT) compiler on the JVM performs so well that simple
+functions can have comparable performance to their C or C++ equivalents,
+ignoring the cost of garbage collection. However, the JIT only performs *low
+level optimisations*: branch prediction, inlining methods, unrolling loops, and
+so on.
+
+The JIT does not perform optimisations of our business logic, for example
+batching network calls or parallelising independent tasks. The developer is
+responsible for writing the business logic and optimisations at the same time,
+reducing readability and making it harder to maintain. It would be good if
+optimisation was a tangential concern.
+
+If instead, we have a data structure that describes our business logic in terms
+of high level concepts, not machine instructions, we can perform *high level
+optimisation*. Data structures of this nature are typically called *Free*
+structures and can be generated for free for the members of the algebraic
+interfaces of our program. For example, a *Free Applicative* can be generated
+that allows us to batch or de-duplicate expensive network I/O.
+
+In this section we will learn how to create free structures, and how they can be
+used.
+
+
+### `Free` (`Monad`)
+
+Fundamentally, a monad describes a sequential program where every step depends
+on the previous one. We are therefore limited to modifications that only know
+about things that we've already run and the next thing we are going to run.
+
+A> It was trendy, circa 2015, to write FP programs in terms of `Free` so this is as
+A> much an exercise in how to understand `Free` code as it is to be able to write
+A> or use it.
+A> 
+A> There is a lot of boilerplate to create a free structure. We shall use this
+A> study of `Free` to learn how to generate the boilerplate.
+
+As a refresher, `Free` is the data structure representation of a `Monad` and is
+defined by three members
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Free[S[_], A] {
+    def mapK[T[_]](f: S ~> T): Free[T, A] = ...
+    def foldMap[M[_]: Monad](f: S ~> M): M[A] = ...
+  }
+  object Free {
+    implicit def monad[F[_], A]: Monad[Free[F, A]] = ...
+  
+    final case class Pure[S[_], A](a: A) extends Free[S, A]
+    final case class Suspend[S[_], A](a: S[A]) extends Free[S, A]
+    final case class FlatMapped[S[_], B, C](c: Free[S, C], f: C => Free[S, B]) extends Free[S, B]
+  
+    def liftF[S[_], A](value: S[A]): Free[S, A] = Suspend(value)
+    ...
+  }
+~~~~~~~~
+
+-   `Suspend` represents a program that has not yet been interpreted
+-   `Pure` is `.pure`
+-   `FlatMapped` is `.flatMap`
+
+A `Free[S, A]` can be *freely generated* for any algebra `S`. To make this
+explicit, consider our application's `Machines` algebra
+
+{lang="text"}
+~~~~~~~~
+  trait Machines[F[_]] {
+    def getTime: F[Epoch]
+    def getManaged: F[NonEmptyList[MachineNode]]
+    def getAlive: F[Map[MachineNode, Epoch]]
+    def start(node: MachineNode): F[Unit]
+    def stop(node: MachineNode): F[Unit]
+  }
+~~~~~~~~
+
+We define a freely generated `Free` for `Machines` by creating an ADT with a
+data type for each element of the algebra. Each data type has the same input
+parameters as its corresponding element, is parameterised over the return type,
+and has the same name:
+
+{lang="text"}
+~~~~~~~~
+  object Machines {
+    sealed abstract class Ast[A]
+    final case class GetTime()                extends Ast[Epoch]
+    final case class GetManaged()             extends Ast[NonEmptyList[MachineNode]]
+    final case class GetAlive()               extends Ast[Map[MachineNode, Epoch]]
+    final case class Start(node: MachineNode) extends Ast[Unit]
+    final case class Stop(node: MachineNode)  extends Ast[Unit]
+    ...
+~~~~~~~~
+
+The ADT defines an Abstract Syntax Tree (AST) because each member is
+representing a computation in a program.
+
+W> The freely generated `Free` for `Machines` is `Free[Machines.Ast, ?]`, i.e. for
+W> the AST, not `Free[Machines, ?]`. It is easy to make a mistake, since the latter
+W> is a valid type, but is meaningless.
+
+We then define `.liftF`, an implementation of `Machines`, with `Free[Ast, ?]` as
+the context. Every method simply delegates to `Free.liftT` to create a `Suspend`
+
+{lang="text"}
+~~~~~~~~
+  ...
+    def liftF = new Machines[Free[Ast, ?]] {
+      def getTime = Free.liftF(GetTime())
+      def getManaged = Free.liftF(GetManaged())
+      def getAlive = Free.liftF(GetAlive())
+      def start(node: MachineNode) = Free.liftF(Start(node))
+      def stop(node: MachineNode) = Free.liftF(Stop(node))
+    }
+  }
+~~~~~~~~
+
+When we construct our program, parameterised over a `Free`, we run it by
+providing an *interpreter* (a natural transformation `Ast ~> M`) to the
+`.foldMap` method. For example, if we could provide an interpreter that maps to
+`IO` we can construct an `IO[Unit]` program via the free AST
+
+{lang="text"}
+~~~~~~~~
+  def program[F[_]: Monad](M: Machines[F]): F[Unit] = ...
+  
+  val interpreter: Machines.Ast ~> IO = ...
+  
+  val app: IO[Unit] = program[Free[Machines.Ast, ?]](Machines.liftF)
+                        .foldMap(interpreter)
+~~~~~~~~
+
+For completeness, an interpreter that delegates to a direct implementation is
+easy to write. This might be useful if the rest of the application is using
+`Free` as the context and we already have an `IO` implementation that we want to
+use:
+
+{lang="text"}
+~~~~~~~~
+  def interpreter[F[_]](f: Machines[F]): Ast ~> F = λ[Ast ~> F] {
+    case GetTime()    => f.getTime
+    case GetManaged() => f.getManaged
+    case GetAlive()   => f.getAlive
+    case Start(node)  => f.start(node)
+    case Stop(node)   => f.stop(node)
+  }
+~~~~~~~~
+
+But our business logic needs more than just `Machines`, we also need access to
+the `Drone` algebra, recall defined as
+
+{lang="text"}
+~~~~~~~~
+  trait Drone[F[_]] {
+    def getBacklog: F[Int]
+    def getAgents: F[Int]
+  }
+  object Drone {
+    sealed abstract class Ast[A]
+    ...
+    def liftF = ...
+    def interpreter = ...
+  }
+~~~~~~~~
+
+What we want is for our AST to be a combination of the `Machines` and `Drone`
+ASTs. We studied `EitherK` in Chapter 6, a higher kinded disjunction:
+
+{lang="text"}
+~~~~~~~~
+  final case class EitherK[F[_], G[_], A](run: Either[F[A], G[A]])
+~~~~~~~~
+
+We can use the context `Free[EitherK[Machines.Ast, Drone.Ast, ?], ?]`.
+
+The `InjectK` typeclass helps us to create larger combinations of algebras:
+
+{lang="text"}
+~~~~~~~~
+  type :<:[F[_], G[_]] = InjectK[F, G]
+  sealed abstract class InjectK[F[_], G[_]] {
+    def inj: F ~> G
+    def prj: G ~> λ[α => Option[F[α]]]
+  }
+~~~~~~~~
+
+`implicit` rules on the `InjectK` companion will create the combination of
+nested `EitherK` that we need, letting us rewrite our `.liftF` to work for any
+combination of ASTs:
+
+{lang="text"}
+~~~~~~~~
+  def liftF[F[_]](implicit I: Ast :<: F) = new Machines[Free[F, ?]] {
+    def getTime                  = Free.liftF(I.inj(GetTime()))
+    def getManaged               = Free.liftF(I.inj(GetManaged()))
+    def getAlive                 = Free.liftF(I.inj(GetAlive()))
+    def start(node: MachineNode) = Free.liftF(I.inj(Start(node)))
+    def stop(node: MachineNode)  = Free.liftF(I.inj(Stop(node)))
+  }
+~~~~~~~~
+
+It is nice that `F :<: G` reads as if our `Ast` is a member of the complete `F`
+instruction set: this syntax is intentional.
+
+A> A macro that automatically produces the `Free` boilerplate would be a great
+A> contribution to the ecosystem!
+
+Putting it all together, lets say we have a program that we wrote abstracting over `Monad`
+
+{lang="text"}
+~~~~~~~~
+  def program[F[_]: Monad](M: Machines[F], D: Drone[F]): F[Unit] = ...
+~~~~~~~~
+
+and we have some existing implementations of `Machines` and `Drone`, we can
+create interpreters from them:
+
+{lang="text"}
+~~~~~~~~
+  val MachinesIO: Machines[IO] = ...
+  val DroneIO: Drone[IO]       = ...
+  
+  val M: Machines.Ast ~> IO = Machines.interpreter(MachinesIO)
+  val D: Drone.Ast ~> IO    = Drone.interpreter(DroneIO)
+~~~~~~~~
+
+and combine them into the larger instruction set using a convenience method from
+`FunctionK`
+
+{lang="text"}
+~~~~~~~~
+  trait FunctionK[F[_], G[_]] {
+    def or[H[_]](h: H ~> G): EitherK[F, H, ?] ~> G = ...
+    ...
+  }
+  
+  type Ast[a] = EitherK[Machines.Ast, Drone.Ast, a]
+  
+  val interpreter: Ast ~> IO = M or D
+~~~~~~~~
+
+Then use it to produce an `IO`
+
+{lang="text"}
+~~~~~~~~
+  val app: IO[Unit] = program[Free[Ast, ?]](Machines.liftF, Drone.liftF)
+                        .foldMap(interpreter)
+~~~~~~~~
+
+But we've gone in circles! We could have used `IO` as the context for our
+program in the first place and avoided `Free`. So why did we do this? Here are
+some examples of where `Free` might be useful.
+
+
+#### Testing: Mocks and Stubs
+
+It might sound hypocritical to propose that `Free` can be used to reduce
+boilerplate, given how much code we have written. However, there is a tipping
+point where the `Ast` pays for itself when we have many tests that require stub
+implementations.
+
+If the `.Ast` and `.liftF` is defined for an algebra, we can create *partial
+interpreters*
+
+{lang="text"}
+~~~~~~~~
+  val M: Machines.Ast ~> Id = stub[Map[MachineNode, Epoch]] {
+    case Machines.GetAlive() => Map.empty
+  }
+  val D: Drone.Ast ~> Id = stub[Int] {
+    case Drone.GetBacklog() => 1
+  }
+~~~~~~~~
+
+which can be used to test our `program`
+
+{lang="text"}
+~~~~~~~~
+  program[Free[Ast, ?]](Machines.liftF, Drone.liftF)
+    .foldMap(M or D)
+    .shouldBe(1)
+~~~~~~~~
+
+By using partial functions, and not total functions, we are exposing ourselves
+to runtime errors. Many teams are happy to accept this risk in their unit tests
+since the test would fail if there is a programmer error.
+
+Arguably we could also achieve the same thing with implementations of our
+algebras that implement every method with `???`, overriding what we need on a
+case by case basis.
+
+A> `stub` is defined using a type inference trick. The reason for `Stub` being a
+A> separate class is so that we only need to provide the `A` type parameter, with
+A> `F` and `G` inferred from the callsite:
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   object Mocker {
+A>     final class Stub[A] {
+A>       def apply[F[_], G[_]](pf: PartialFunction[F[A], G[A]]): F ~> G = new (F ~> G) {
+A>         def apply[α](fa: F[α]) = pf.asInstanceOf[PartialFunction[F[α], G[α]]](fa)
+A>       }
+A>     }
+A>     def stub[A]: Stub[A] = new Stub[A]
+A>   }
+A> ~~~~~~~~
+
+
+#### Monitoring
+
+It is typical for server applications to be monitored by runtime agents that
+manipulate bytecode to insert profilers and extract various kinds of usage or
+performance information.
+
+If our application's context is `Free`, we do not need to resort to bytecode
+manipulation, we can instead implement a side-effecting monitor as an
+interpreter that we have complete control over.
+
+A> Runtime introspection is one of the few cases that can justify use of a
+A> side-effect. If the monitoring is not visible to the program itself, referential
+A> transparency will still hold. This is also the argument used by teams that use
+A> side-effecting debug logging.
+
+For example, consider using this `Ast ~> Ast` "agent"
+
+{lang="text"}
+~~~~~~~~
+  val Monitor = λ[Demo.Ast ~> Demo.Ast](
+    _.run match {
+      case Right(m @ Drone.GetBacklog()) =>
+        JmxUtils.count("backlog")
+        EitherK.rightc(m)
+      case other =>
+        EitherK(other)
+    }
+  )
+~~~~~~~~
+
+which records method invocations: we would use a vendor-specific routine in real
+code. We could also watch for specific messages of interest and log them as a
+debugging aid.
+
+We can attach `Monitor` to our production `Free` application with
+
+{lang="text"}
+~~~~~~~~
+  .mapK(Monitor).foldMap(interpreter)
+~~~~~~~~
+
+or combine the natural transformations and run with a single
+
+{lang="text"}
+~~~~~~~~
+  .foldMap(Monitor.andThen(interpreter))
+~~~~~~~~
+
+
+#### Monkey Patching
+
+As engineers, we are used to requests for bizarre workarounds to be added to the
+core logic of the application. We might want to codify such corner cases as
+*exceptions to the rule* and handle them tangentially to our core logic.
+
+For example, suppose we get a memo from accounting telling us
+
+> *URGENT: Bob is using node `#c0ffee` to run the year end. DO NOT STOP THIS
+> MACHINE!1!*
+
+There is no possibility to discuss why Bob shouldn't be using our machines for
+his super-important accounts, so we have to hack our business logic and put out
+a release to production as soon as possible.
+
+Our monkey patch can map into a `Free` structure, allowing us to return a
+pre-canned result (`Free.pure`) instead of scheduling the instruction. We
+special case the instruction in a custom natural transformation with its return
+value:
+
+{lang="text"}
+~~~~~~~~
+  val monkey = λ[Machines.Ast ~> Free[Machines.Ast, ?]] {
+    case Machines.Stop(MachineNode("#c0ffee")) => Free.pure(())
+    case other                                 => Free.liftF(other)
+  }
+~~~~~~~~
+
+eyeball that it works, push it to prod, and set an alarm for next week to remind
+us to remove it, and revoke Bob's access to our servers.
+
+Our unit test could use `State` as the target context, so we can keep track of
+all the nodes we stopped:
+
+{lang="text"}
+~~~~~~~~
+  type S = Set[MachineNode]
+  val M: Machines.Ast ~> State[S, ?] = Mocker.stub[Unit] {
+    case Machines.Stop(node) => State.modify[S](_ + node)
+  }
+  
+  Machines
+    .liftF[Machines.Ast]
+    .stop(MachineNode("#c0ffee"))
+    .foldMap(monkey)
+    .foldMap(M)
+    .runS(Set())
+    .shouldBe(Set())
+~~~~~~~~
+
+along with a test that "normal" nodes are not affected.
+
+An advantage of using `Free` to avoid stopping the `#c0ffee` nodes is that we
+can be sure to catch all the usages instead of having to go through the business
+logic and look for all usages of `.stop`. If our application context is just an
+`IO` we could, of course, implement this logic in the `Machines[IO]`
+implementation but an advantage of using `Free` is that we don't need to touch
+the existing code and can instead isolate and test this (temporary) behaviour,
+without being tied to the `IO` implementations.
+
+
+### `FreeApplicative` (`Applicative`)
+
+Despite this chapter being called **Cats Monads**, the takeaway is: *we
+shouldn't use monads unless we really **really** have to*. In this section, we
+will see why `FreeApplicative` is preferable to `Free` monads.
+
+`FreeApplicative` is defined as the data structure representation of the `ap`
+and `pure` methods from the `Applicative` typeclass:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class FreeApplicative[S[_], A] {
+    def compile[G[_]](f: S ~> G): FreeApplicative[G,A] = ...
+    def foldMap[G[_]: Applicative](f: S ~> G): G[A] = ...
+    def monad: Free[S, A] = ...
+    def analyze[M:Monoid](f: F ~> λ[α => M]): M = ...
+    ...
+  }
+  object FreeApplicative {
+    implicit def applicative[F[_], A]: Applicative[FreeApplicative[F, A]] = ...
+  
+    def lift[F[_], A](fa: F[A]): FreeApplicative[F, A] = ...
+  }
+~~~~~~~~
+
+The methods `.compile` and `.foldMap` are like their `Free` analogues
+`.mapK` and `.foldMap`.
+
+As a convenience, we can generate a `Free[S, A]` from our `FreeApplicative[S,
+A]` with `.monad`. This is especially useful to optimise smaller `Applicative`
+subsystems yet use them as part of a larger `Free` program.
+
+Like `Free`, we must create a `FreeApplicative` for our ASTs
+
+{lang="text"}
+~~~~~~~~
+  def liftA[F[_]](implicit I: Ast :<: F) = new Machines[FreeApplicative[F, ?]] {
+    def getTime = FreeApplicative.lift(I.inj(GetTime()))
+    ...
+  }
+~~~~~~~~
+
+
+#### Batching Network Calls
+
+We opened this chapter with grand claims about performance. Time to deliver.
+
+[Philip Stark](https://gist.github.com/hellerbarde/2843375#file-latency_humanized-markdown)'s Humanised version of [Peter Norvig's Latency Numbers](http://norvig.com/21-days.html#answers) serve as
+motivation for why we should focus on reducing network calls to optimise an
+application:
+
+| Computer                          | Human Timescale | Human Analogy                  |
+|--------------------------------- |--------------- |------------------------------ |
+| L1 cache reference                | 0.5 secs        | One heart beat                 |
+| Branch mispredict                 | 5 secs          | Yawn                           |
+| L2 cache reference                | 7 secs          | Long yawn                      |
+| Mutex lock/unlock                 | 25 secs         | Making a cup of tea            |
+| Main memory reference             | 100 secs        | Brushing your teeth            |
+| Compress 1K bytes with Zippy      | 50 min          | Scala compiler CI pipeline     |
+| Send 2K bytes over 1Gbps network  | 5.5 hr          | Train London to Edinburgh      |
+| SSD random read                   | 1.7 days        | Weekend                        |
+| Read 1MB sequentially from memory | 2.9 days        | Long weekend                   |
+| Round trip within same datacenter | 5.8 days        | Long US Vacation               |
+| Read 1MB sequentially from SSD    | 11.6 days       | Short EU Holiday               |
+| Disk seek                         | 16.5 weeks      | Term of university             |
+| Read 1MB sequentially from disk   | 7.8 months      | Fully paid maternity in Norway |
+| Send packet CA->Netherlands->CA   | 4.8 years       | Government's term              |
+
+Although `Free` and `FreeApplicative` incur a memory allocation overhead, the
+equivalent of 100 seconds in the humanised chart, every time we can turn two
+sequential network calls into one batch call, we save nearly 5 years.
+
+When we are in a `Applicative` context, we can safely optimise our application
+without breaking any of the expectations of the original program, and without
+cluttering the business logic.
+
+Luckily, our main business logic only requires an `Applicative`, recall
+
+{lang="text"}
+~~~~~~~~
+  final class DynAgentsModule[F[_]: Applicative](D: Drone[F], M: Machines[F])
+      extends DynAgents[F] {
+    def act(world: WorldView): F[WorldView] = ...
+    ...
+  }
+~~~~~~~~
+
+To begin, we create the `.lift` boilerplate for a new `Batch` algebra
+
+{lang="text"}
+~~~~~~~~
+  trait Batch[F[_]] {
+    def start(nodes: NonEmptyList[MachineNode]): F[Unit]
+  }
+  object Batch {
+    sealed abstract class Ast[A]
+    final case class Start(nodes: NonEmptyList[MachineNode]) extends Ast[Unit]
+  
+    def liftA[F[_]](implicit I: Ast :<: F) = new Batch[FreeApplicative[F, ?]] {
+      def start(nodes: NonEmptyList[MachineNode]) = FreeApplicative.lift(I.inj(Start(nodes)))
+    }
+  }
+~~~~~~~~
+
+and then we will create an instance of `DynAgentsModule` with `FreeApplicative` as the context
+
+{lang="text"}
+~~~~~~~~
+  type Orig[a] = EitherK[Machines.Ast, Drone.Ast, a]
+  
+  val world: WorldView = ...
+  val program = new DynAgentsModule(Drone.liftA[Orig], Machines.liftA[Orig])
+  val freeap  = program.act(world)
+~~~~~~~~
+
+In Chapter 6, we studied the `Const` data type, which allows us to analyse a
+program. It should not be surprising that `.analyze` is implemented in terms of
+`Const`:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class FreeApplicative[S[_], A] {
+    ...
+    def analyze[M: Monoid](f: S ~> λ[α => M]): M =
+      foldMap(λ[S ~> Const[M, ?]](x => Const(f(x)))).getConst
+  }
+~~~~~~~~
+
+We provide a natural transformation to record all node starts and `.analyze` our
+program to get all the nodes that need to be started:
+
+{lang="text"}
+~~~~~~~~
+  val gather = λ[Orig ~> λ[α => List[MachineNode]]] {
+    case EitherK(Left(Machines.Start(node))) => List(node)
+    case _                                   => Nil
+  }
+  val gathered: List[MachineNode] = freeap.analyze(gather)
+~~~~~~~~
+
+The next step is to extend the instruction set from `Orig` to `Extended`, which
+includes the `Batch.Ast` and write a `FreeApplicative` program that starts all our
+`gathered` nodes in a single network call
+
+{lang="text"}
+~~~~~~~~
+  type Extended[a] = EitherK[Batch.Ast, Orig, a]
+  def batch(nodes: List[MachineNode]): FreeApplicative[Extended, Unit] =
+    nodes.toNel match {
+      case None        => FreeApplicative.pure(())
+      case Some(nodes) => FreeApplicative.lift(EitherK.leftc(Batch.Start(nodes)))
+    }
+~~~~~~~~
+
+We also need to remove all the calls to `Machines.Start`, which we can do with a natural transformation
+
+{lang="text"}
+~~~~~~~~
+  val nostart = λ[Orig ~> FreeApplicative[Extended, ?]] {
+    case EitherK(Left(Machines.Start(_))) => FreeApplicative.pure(())
+    case other                            => FreeApplicative.lift(EitherK.rightc(other))
+  }
+~~~~~~~~
+
+Now we have two programs, and need to combine them. Recall the `productR`
+operator (`*>`) from `Apply`
+
+{lang="text"}
+~~~~~~~~
+  val patched = batch(gathered) *> freeap.foldMap(nostart)
+~~~~~~~~
+
+Putting it all together under a single method:
+
+{lang="text"}
+~~~~~~~~
+  def optimise[A](orig: FreeApplicative[Orig, A]): FreeApplicative[Extended, A] =
+    (batch(orig.analyze(gather)) *> orig.foldMap(nostart))
+~~~~~~~~
+
+That Is it! We `.optimise` every time we call `act` in our main loop, which is
+just a matter of plumbing.
+
+
+### `Coyoneda` (`Functor`)
+
+Named after mathematician Nobuo Yoneda, we can freely generate a `Functor` data
+structure for any algebra `S[_]`
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Coyoneda[F[_], A] {
+    def run(implicit F: Functor[F]): F[A] = ...
+    def mapK[G[_]](f: F ~> G): Coyoneda[G, A] = ...
+    ...
+  }
+  object Coyoneda {
+    implicit def functor[F[_], A]: Functor[Coyoneda[F, A]] = ...
+  
+    type Aux[F[_], A, B] = Coyoneda[F, A] { type Pivot = B }
+    def apply[F[_], A, B](fa: F[A])(f: A => B): Aux[F, B, A] =
+    def lift[F[_], A](fa: F[A]): Coyoneda[F, A] = ...
+    ...
+  }
+~~~~~~~~
+
+and there is also a contravariant version
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class ContravariantCoyoneda[F[_], A] {
+    def run(implicit F: Contravariant[F]): F[A] = ...
+    def mapK[G[_]](f: F ~> G): ContravariantCoyoneda[G, A] = ...
+    ...
+  }
+  object ContravariantCoyoneda {
+    implicit def contravariant[F[_], A]: Contravariant[ContravariantCoyoneda[F, A]] = ...
+  
+    type Aux[F[_], A, B] = ContravariantCoyoneda[F, A] { type Pivot = B }
+    def apply[F[_], A, B](fa: F[A])(f: B => A): Aux[F, B, A] = ...
+    def lift[F[_], A](fa: F[A]): ContravariantCoyoneda[F, A] = ...
+    ...
+  }
+~~~~~~~~
+
+A> The colloquial for `Coyoneda` is *coyo* and `ContravariantCoyoneda` is *cocoyo*.
+A> Just some Free Fun.
+
+The API is somewhat simpler than `Free` and `FreeApplicative`, allowing a natural
+transformation with `.mapK` and a `.run` (taking an actual `Functor` or
+`Contravariant`, respectively) to escape the free structure.
+
+Coyo and cocoyo can be a useful utility if we want to `.map` or `.contramap`
+over a type, and we know that we can convert into a data type that has a Functor
+but we don't want to commit to the final data structure too early. For example,
+we create a `Coyoneda[Set, ?]` (note that `Set` does not have a `Functor`) to
+use methods that require a `Functor`, then convert into `List` later on.
+
+If we want to optimise a program with coyo or cocoyo we have to provide the
+expected boilerplate for each algebra:
+
+{lang="text"}
+~~~~~~~~
+  def liftCoyo[F[_]](implicit I: Ast :<: F) = new Machines[Coyoneda[F, ?]] {
+    def getTime = Coyoneda.lift(I.inj(GetTime()))
+    ...
+  }
+  def liftCocoyo[F[_]](implicit I: Ast :<: F) = new Machines[ContravariantCoyoneda[F, ?]] {
+    def getTime = ContravariantCoyoneda.lift(I.inj(GetTime()))
+    ...
+  }
+~~~~~~~~
+
+An optimisation we get by using `Coyoneda` is *map fusion* (and *contramap
+fusion*), which allows us to rewrite
+
+{lang="text"}
+~~~~~~~~
+  xs.map(a).map(b).map(c)
+~~~~~~~~
+
+into
+
+{lang="text"}
+~~~~~~~~
+  xs.map(x => c(b(a(x))))
+~~~~~~~~
+
+avoiding intermediate representations. For example, if `xs` is a `List` of a
+thousand elements, we save two thousand object allocations because we only map
+over the data structure once.
 
 

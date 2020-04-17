@@ -77,7 +77,7 @@ final class AlgebraSpec extends Test {
   "Free Algebra Interpreters".should("combine their powers").in {
     val iD: Drone.Ast ~> IO         = Drone.interpreter(DummyDrone)
     val iM: Machines.Ast ~> IO      = Machines.interpreter(DummyMachines)
-    val interpreter: Demo.Ast ~> IO = or(iM, iD)
+    val interpreter: Demo.Ast ~> IO = iM or iD
 
     Demo.program
       .foldMap(interpreter)
@@ -88,7 +88,7 @@ final class AlgebraSpec extends Test {
   it.should("support monitoring").in {
     val iD: Drone.Ast ~> IO         = Drone.interpreter(DummyDrone)
     val iM: Machines.Ast ~> IO      = Machines.interpreter(DummyMachines)
-    val interpreter: Demo.Ast ~> IO = or(iM, iD)
+    val interpreter: Demo.Ast ~> IO = iM or iD
 
     var count = 0
     val Monitor = λ[Demo.Ast ~> Demo.Ast](
@@ -121,7 +121,7 @@ final class AlgebraSpec extends Test {
     }
 
     Demo.program
-      .foldMap(or(M, D))
+      .foldMap(M or D)
       .shouldBe(1)
   }
 
@@ -190,7 +190,7 @@ final class AlgebraSpec extends Test {
     }
 
     optimise(freeap)
-      .foldMap(or(B, or(M, D)))
+      .foldMap(B or (M or D))
       .runS(S(List(), List()))
       .value
       .shouldBe(

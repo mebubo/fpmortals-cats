@@ -38,7 +38,8 @@ presented in this book.
 
 ** Copyright Notice
 
-This book is a update of "Functional Programming for Mortals" by Sam Halliday.
+This book is an updated and revised edition of "Functional Programming for
+Mortals" by Sam Halliday.
 
 Like the original, this book uses the [[https://creativecommons.org/licenses/by-sa/4.0/legalcode][Creative Commons Attribution ShareAlike
 4.0 International]] (CC BY-SA 4.0) license.
@@ -5938,14 +5939,14 @@ wrapped version of =.act=
 final class Monitored[U[_]: Functor](program: DynAgents[U]) {
   type F[a] = Const[Set[MachineNode], a]
   private val D = new Drone[F] {
-    def getBacklog: F[Int] = Const(Set.empty)
-    def getAgents: F[Int]  = Const(Set.empty)
+    def getBacklog: F[Int] = Const(Set())
+    def getAgents: F[Int]  = Const(Set())
   }
   private val M = new Machines[F] {
-    def getAlive: F[Map[MachineNode, Epoch]]     = Const(Set.empty)
-    def getManaged: F[NonEmptyList[MachineNode]] = Const(Set.empty)
-    def getTime: F[Epoch]                        = Const(Set.empty)
-    def start(node: MachineNode): F[Unit]        = Const(Set.empty)
+    def getAlive: F[Map[MachineNode, Epoch]]     = Const(Set())
+    def getManaged: F[NonEmptyList[MachineNode]] = Const(Set())
+    def getTime: F[Epoch]                        = Const(Set())
+    def start(node: MachineNode): F[Unit]        = Const(Set())
     def stop(node: MachineNode): F[Unit]         = Const(Set(node))
   }
   val monitor = new DynAgentsModule[F](D, M)
@@ -7423,16 +7424,7 @@ Some applications do not care about allocations if they are bounded by network
 or I/O. Always measure.
 #+END_ASIDE
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 *** A Free Lunch
-
-# You are free to use any methods necessary, but I want them alive.
-# Jabba! This is your last chance. Free us or die.
-# But these are my friends. Threepio, tell them they must be set free.
 
 Our industry craves safe high-level languages, trading developer efficiency and
 reliability for reduced runtime performance.
@@ -7479,19 +7471,15 @@ defined by three members
 
 #+BEGIN_SRC scala
 sealed abstract class Free[S[_], A] {
-  def mapSuspension[T[_]](f: S ~> T): Free[T, A] = ...
+  def mapK[T[_]](f: S ~> T): Free[T, A] = ...
   def foldMap[M[_]: Monad](f: S ~> M): M[A] = ...
-  ...
 }
 object Free {
-  implicit def monad[S[_], A]: Monad[Free[S, A]] = ...
+  implicit def monad[F[_], A]: Monad[Free[F, A]] = ...
 
-  private final case class Suspend[S[_], A](a: S[A]) extends Free[S, A]
-  private final case class Return[S[_], A](a: A)     extends Free[S, A]
-  private final case class FlatMapped[S[_], A0, B](
-    a: Free[S, A0],
-    f: A0 => Free[S, B]
-  ) extends Free[S, B] { type A = A0 }
+  final case class Pure[S[_], A](a: A) extends Free[S, A]
+  final case class Suspend[S[_], A](a: S[A]) extends Free[S, A]
+  final case class FlatMapped[S[_], B, C](c: Free[S, C], f: C => Free[S, B]) extends Free[S, B]
 
   def liftF[S[_], A](value: S[A]): Free[S, A] = Suspend(value)
   ...
@@ -7499,8 +7487,8 @@ object Free {
 #+END_SRC
 
 - =Suspend= represents a program that has not yet been interpreted
-- =Return= is =.pure=
-- =FlatMapped= is =.bind=
+- =Pure= is =.pure=
+- =FlatMapped= is =.flatMap=
 
 A =Free[S, A]= can be /freely generated/ for any algebra =S=. To make this
 explicit, consider our application's =Machines= algebra
@@ -7537,7 +7525,7 @@ representing a computation in a program.
 #+BEGIN_WARNING
 The freely generated =Free= for =Machines= is =Free[Machines.Ast, ?]=, i.e. for
 the AST, not =Free[Machines, ?]=. It is easy to make a mistake, since the latter
-will compile, but is meaningless.
+is a valid type, but is meaningless.
 #+END_WARNING
 
 We then define =.liftF=, an implementation of =Machines=, with =Free[Ast, ?]= as
@@ -7601,33 +7589,27 @@ object Drone {
 #+END_SRC
 
 What we want is for our AST to be a combination of the =Machines= and =Drone=
-ASTs. We studied =Coproduct= in Chapter 6, a higher kinded disjunction:
+ASTs. We studied =EitherK= in Chapter 6, a higher kinded disjunction:
 
 #+BEGIN_SRC scala
-final case class Coproduct[F[_], G[_], A](run: F[A] \/ G[A])
+final case class EitherK[F[_], G[_], A](run: Either[F[A], G[A]])
 #+END_SRC
 
-We can use the context =Free[Coproduct[Machines.Ast, Drone.Ast, ?], ?]=.
+We can use the context =Free[EitherK[Machines.Ast, Drone.Ast, ?], ?]=.
 
-We could manually create the coproduct but we would be swimming in boilerplate,
-and we'd have to do it all again if we wanted to add a third algebra.
-
-The =scalaz.Inject= typeclass helps:
+The =InjectK= typeclass helps us to create larger combinations of algebras:
 
 #+BEGIN_SRC scala
-type :<:[F[_], G[_]] = Inject[F, G]
-sealed abstract class Inject[F[_], G[_]] {
-  def inj[A](fa: F[A]): G[A]
-  def prj[A](ga: G[A]): Option[F[A]]
-}
-object Inject {
-  implicit def left[F[_], G[_]]: F :<: Coproduct[F, G, ?]] = ...
-  ...
+type :<:[F[_], G[_]] = InjectK[F, G]
+sealed abstract class InjectK[F[_], G[_]] {
+  def inj: F ~> G
+  def prj: G ~> λ[α => Option[F[α]]]
 }
 #+END_SRC
 
-The =implicit= derivations generate =Inject= instances when we need them,
-letting us rewrite our =liftF= to work for any combination of ASTs:
+=implicit= rules on the =InjectK= companion will create the combination of
+nested =EitherK= that we need, letting us rewrite our =.liftF= to work for any
+combination of ASTs:
 
 #+BEGIN_SRC scala
   def liftF[F[_]](implicit I: Ast :<: F) = new Machines[Free[F, ?]] {
@@ -7643,10 +7625,8 @@ It is nice that =F :<: G= reads as if our =Ast= is a member of the complete =F=
 instruction set: this syntax is intentional.
 
 #+BEGIN_ASIDE
-A compiler plugin that automatically produces the =scalaz.Free= boilerplate
-would be a great contribution to the ecosystem! Not only is it painful to write
-the boilerplate, but there is the potential for a typo to ruin our day: if two
-members of the algebra have the same type signature, we might not notice.
+A macro that automatically produces the =Free= boilerplate would be a great
+contribution to the ecosystem!
 #+END_ASIDE
 
 Putting it all together, lets say we have a program that we wrote abstracting over =Monad=
@@ -7667,17 +7647,17 @@ val D: Drone.Ast ~> IO    = Drone.interpreter(DroneIO)
 #+END_SRC
 
 and combine them into the larger instruction set using a convenience method from
-the =NaturalTransformation= companion
+=FunctionK=
 
 #+BEGIN_SRC scala
-object NaturalTransformation {
-  def or[F[_], G[_], H[_]](fg: F ~> G, hg: H ~> G): Coproduct[F, H, ?] ~> G = ...
+trait FunctionK[F[_], G[_]] {
+  def or[H[_]](h: H ~> G): EitherK[F, H, ?] ~> G = ...
   ...
 }
 
-type Ast[a] = Coproduct[Machines.Ast, Drone.Ast, a]
+type Ast[a] = EitherK[Machines.Ast, Drone.Ast, a]
 
-val interpreter: Ast ~> IO = NaturalTransformation.or(M, D)
+val interpreter: Ast ~> IO = M or D
 #+END_SRC
 
 Then use it to produce an =IO=
@@ -7687,11 +7667,9 @@ val app: IO[Unit] = program[Free[Ast, ?]](Machines.liftF, Drone.liftF)
                       .foldMap(interpreter)
 #+END_SRC
 
-# https://github.com/scalaz/scalaz/pull/1753
-
 But we've gone in circles! We could have used =IO= as the context for our
-program in the first place and avoided =Free=. So why did we put ourselves
-through all this pain? Here are some examples of where =Free= might be useful.
+program in the first place and avoided =Free=. So why did we do this? Here are
+some examples of where =Free= might be useful.
 
 ***** Testing: Mocks and Stubs
 
@@ -7716,7 +7694,7 @@ which can be used to test our =program=
 
 #+BEGIN_SRC scala
     program[Free[Ast, ?]](Machines.liftF, Drone.liftF)
-      .foldMap(or(M, D))
+      .foldMap(M or D)
       .shouldBe(1)
 #+END_SRC
 
@@ -7729,11 +7707,9 @@ algebras that implement every method with =???=, overriding what we need on a
 case by case basis.
 
 #+BEGIN_ASIDE
-The library [[https://github.com/djspiewak/smock][smock]] is more powerful, but for the purposes of this short example
-we can define =stub= ourselves using a type inference trick that can be found
-all over the Scalaz source code. The reason for =Stub= being a separate class is
-so that we only need to provide the =A= type parameter, with =F= and =G=
-inferred from the left hand side of the expression:
+=stub= is defined using a type inference trick. The reason for =Stub= being a
+separate class is so that we only need to provide the =A= type parameter, with
+=F= and =G= inferred from the callsite:
 
 #+BEGIN_SRC scala
 object Mocker {
@@ -7761,8 +7737,7 @@ interpreter that we have complete control over.
 Runtime introspection is one of the few cases that can justify use of a
 side-effect. If the monitoring is not visible to the program itself, referential
 transparency will still hold. This is also the argument used by teams that use
-side-effecting debug logging, and our argument for allowing mutation in the
-implementation of =Memo=.
+side-effecting debug logging.
 #+END_ASIDE
 
 For example, consider using this =Ast ~> Ast= "agent"
@@ -7770,11 +7745,11 @@ For example, consider using this =Ast ~> Ast= "agent"
 #+BEGIN_SRC scala
     val Monitor = λ[Demo.Ast ~> Demo.Ast](
       _.run match {
-        case \/-(m @ Drone.GetBacklog()) =>
-          JmxAbstractFactoryBeanSingletonProviderUtilImpl.count("backlog")
-          Coproduct.rightc(m)
+        case Right(m @ Drone.GetBacklog()) =>
+          JmxUtils.count("backlog")
+          EitherK.rightc(m)
         case other =>
-          Coproduct(other)
+          EitherK(other)
       }
     )
 #+END_SRC
@@ -7786,7 +7761,7 @@ debugging aid.
 We can attach =Monitor= to our production =Free= application with
 
 #+BEGIN_SRC scala
-.mapSuspension(Monitor).foldMap(interpreter)
+.mapK(Monitor).foldMap(interpreter)
 #+END_SRC
 
 or combine the natural transformations and run with a single
@@ -7841,8 +7816,8 @@ all the nodes we stopped:
       .stop(MachineNode("#c0ffee"))
       .foldMap(monkey)
       .foldMap(M)
-      .exec(Set.empty)
-      .shouldBe(Set.empty)
+      .runS(Set())
+      .shouldBe(Set())
 #+END_SRC
 
 along with a test that "normal" nodes are not affected.
@@ -7855,52 +7830,44 @@ implementation but an advantage of using =Free= is that we don't need to touch
 the existing code and can instead isolate and test this (temporary) behaviour,
 without being tied to the =IO= implementations.
 
-**** =FreeAp= (=Applicative=)
+**** =FreeApplicative= (=Applicative=)
 
 Despite this chapter being called *Cats Monads*, the takeaway is: /we
 shouldn't use monads unless we really *really* have to/. In this section, we
-will see why =FreeAp= (free applicative) is preferable to =Free= monads.
+will see why =FreeApplicative= is preferable to =Free= monads.
 
-=FreeAp= is defined as the data structure representation of the =ap= and =pure=
-methods from the =Applicative= typeclass:
+=FreeApplicative= is defined as the data structure representation of the =ap=
+and =pure= methods from the =Applicative= typeclass:
 
 # https://www.youtube.com/watch?v=A-lmrvsUi2Y
 
 #+BEGIN_SRC scala
-sealed abstract class FreeAp[S[_], A] {
-  def hoist[G[_]](f: S ~> G): FreeAp[G,A] = ...
+sealed abstract class FreeApplicative[S[_], A] {
+  def compile[G[_]](f: S ~> G): FreeApplicative[G,A] = ...
   def foldMap[G[_]: Applicative](f: S ~> G): G[A] = ...
-  def monadic: Free[S, A] = ...
+  def monad: Free[S, A] = ...
   def analyze[M:Monoid](f: F ~> λ[α => M]): M = ...
   ...
 }
-object FreeAp {
-  implicit def applicative[S[_], A]: Applicative[FreeAp[S, A]] = ...
+object FreeApplicative {
+  implicit def applicative[F[_], A]: Applicative[FreeApplicative[F, A]] = ...
 
-  private final case class Pure[S[_], A](a: A) extends FreeAp[S, A]
-  private final case class Ap[S[_], A, B](
-    value: () => S[B],
-    function: () => FreeAp[S, B => A]
-  ) extends FreeAp[S, A]
-
-  def pure[S[_], A](a: A): FreeAp[S, A] = Pure(a)
-  def lift[S[_], A](x: =>S[A]): FreeAp[S, A] = ...
-  ...
+  def lift[F[_], A](fa: F[A]): FreeApplicative[F, A] = ...
 }
 #+END_SRC
 
-The methods =.hoist= and =.foldMap= are like their =Free= analogues
-=.mapSuspension= and =.foldMap=.
+The methods =.compile= and =.foldMap= are like their =Free= analogues
+=.mapK= and =.foldMap=.
 
-As a convenience, we can generate a =Free[S, A]= from our =FreeAp[S, A]= with
-=.monadic=. This is especially useful to optimise smaller =Applicative=
+As a convenience, we can generate a =Free[S, A]= from our =FreeApplicative[S,
+A]= with =.monad=. This is especially useful to optimise smaller =Applicative=
 subsystems yet use them as part of a larger =Free= program.
 
-Like =Free=, we must create a =FreeAp= for our ASTs, more boilerplate...
+Like =Free=, we must create a =FreeApplicative= for our ASTs
 
 #+BEGIN_SRC scala
-  def liftA[F[_]](implicit I: Ast :<: F) = new Machines[FreeAp[F, ?]] {
-    def getTime = FreeAp.lift(I.inj(GetTime()))
+  def liftA[F[_]](implicit I: Ast :<: F) = new Machines[FreeApplicative[F, ?]] {
+    def getTime = FreeApplicative.lift(I.inj(GetTime()))
     ...
   }
 #+END_SRC
@@ -7930,9 +7897,9 @@ application:
 | Read 1MB sequentially from disk   | 7.8 months      | Fully paid maternity in Norway |
 | Send packet CA->Netherlands->CA   | 4.8 years       | Government's term              |
 
-Although =Free= and =FreeAp= incur a memory allocation overhead, the equivalent
-of 100 seconds in the humanised chart, every time we can turn two sequential
-network calls into one batch call, we save nearly 5 years.
+Although =Free= and =FreeApplicative= incur a memory allocation overhead, the
+equivalent of 100 seconds in the humanised chart, every time we can turn two
+sequential network calls into one batch call, we save nearly 5 years.
 
 When we are in a =Applicative= context, we can safely optimise our application
 without breaking any of the expectations of the original program, and without
@@ -7948,7 +7915,7 @@ final class DynAgentsModule[F[_]: Applicative](D: Drone[F], M: Machines[F])
 }
 #+END_SRC
 
-To begin, we create the =lift= boilerplate for a new =Batch= algebra
+To begin, we create the =.lift= boilerplate for a new =Batch= algebra
 
 #+BEGIN_SRC scala
 trait Batch[F[_]] {
@@ -7958,16 +7925,16 @@ object Batch {
   sealed abstract class Ast[A]
   final case class Start(nodes: NonEmptyList[MachineNode]) extends Ast[Unit]
 
-  def liftA[F[_]](implicit I: Ast :<: F) = new Batch[FreeAp[F, ?]] {
-    def start(nodes: NonEmptyList[MachineNode]) = FreeAp.lift(I.inj(Start(nodes)))
+  def liftA[F[_]](implicit I: Ast :<: F) = new Batch[FreeApplicative[F, ?]] {
+    def start(nodes: NonEmptyList[MachineNode]) = FreeApplicative.lift(I.inj(Start(nodes)))
   }
 }
 #+END_SRC
 
-and then we will create an instance of =DynAgentsModule= with =FreeAp= as the context
+and then we will create an instance of =DynAgentsModule= with =FreeApplicative= as the context
 
 #+BEGIN_SRC scala
-  type Orig[a] = Coproduct[Machines.Ast, Drone.Ast, a]
+  type Orig[a] = EitherK[Machines.Ast, Drone.Ast, a]
 
   val world: WorldView = ...
   val program = new DynAgentsModule(Drone.liftA[Orig], Machines.liftA[Orig])
@@ -7975,11 +7942,11 @@ and then we will create an instance of =DynAgentsModule= with =FreeAp= as the co
 #+END_SRC
 
 In Chapter 6, we studied the =Const= data type, which allows us to analyse a
-program. It should not be surprising that =FreeAp.analyze= is implemented in
-terms of =Const=:
+program. It should not be surprising that =.analyze= is implemented in terms of
+=Const=:
 
 #+BEGIN_SRC scala
-sealed abstract class FreeAp[S[_], A] {
+sealed abstract class FreeApplicative[S[_], A] {
   ...
   def analyze[M: Monoid](f: S ~> λ[α => M]): M =
     foldMap(λ[S ~> Const[M, ?]](x => Const(f(x)))).getConst
@@ -7990,37 +7957,37 @@ We provide a natural transformation to record all node starts and =.analyze= our
 program to get all the nodes that need to be started:
 
 #+BEGIN_SRC scala
-    val gather = λ[Orig ~> λ[α => IList[MachineNode]]] {
-      case Coproduct(-\/(Machines.Start(node))) => IList.single(node)
-      case _                                    => IList.empty
+    val gather = λ[Orig ~> λ[α => List[MachineNode]]] {
+      case EitherK(Left(Machines.Start(node))) => List(node)
+      case _                                   => Nil
     }
-    val gathered: IList[MachineNode] = freeap.analyze(gather)
+    val gathered: List[MachineNode] = freeap.analyze(gather)
 #+END_SRC
 
 The next step is to extend the instruction set from =Orig= to =Extended=, which
-includes the =Batch.Ast= and write a =FreeAp= program that starts all our
+includes the =Batch.Ast= and write a =FreeApplicative= program that starts all our
 =gathered= nodes in a single network call
 
 #+BEGIN_SRC scala
-    type Extended[a] = Coproduct[Batch.Ast, Orig, a]
-    def batch(nodes: IList[MachineNode]): FreeAp[Extended, Unit] =
+    type Extended[a] = EitherK[Batch.Ast, Orig, a]
+    def batch(nodes: List[MachineNode]): FreeApplicative[Extended, Unit] =
       nodes.toNel match {
-        case None        => FreeAp.pure(())
-        case Some(nodes) => FreeAp.lift(Coproduct.leftc(Batch.Start(nodes)))
+        case None        => FreeApplicative.pure(())
+        case Some(nodes) => FreeApplicative.lift(EitherK.leftc(Batch.Start(nodes)))
       }
 #+END_SRC
 
 We also need to remove all the calls to =Machines.Start=, which we can do with a natural transformation
 
 #+BEGIN_SRC scala
-    val nostart = λ[Orig ~> FreeAp[Extended, ?]] {
-      case Coproduct(-\/(Machines.Start(_))) => FreeAp.pure(())
-      case other                             => FreeAp.lift(Coproduct.rightc(other))
+    val nostart = λ[Orig ~> FreeApplicative[Extended, ?]] {
+      case EitherK(Left(Machines.Start(_))) => FreeApplicative.pure(())
+      case other                            => FreeApplicative.lift(EitherK.rightc(other))
     }
 #+END_SRC
 
-Now we have two programs, and need to combine them. Recall the =*>= syntax from
-=Apply=
+Now we have two programs, and need to combine them. Recall the =productR=
+operator (=*>=) from =Apply=
 
 #+BEGIN_SRC scala
     val patched = batch(gathered) *> freeap.foldMap(nostart)
@@ -8029,7 +7996,7 @@ Now we have two programs, and need to combine them. Recall the =*>= syntax from
 Putting it all together under a single method:
 
 #+BEGIN_SRC scala
-    def optimise[A](orig: FreeAp[Orig, A]): FreeAp[Extended, A] =
+    def optimise[A](orig: FreeApplicative[Orig, A]): FreeApplicative[Extended, A] =
       (batch(orig.analyze(gather)) *> orig.foldMap(nostart))
 #+END_SRC
 
@@ -8044,15 +8011,15 @@ structure for any algebra =S[_]=
 #+BEGIN_SRC scala
 sealed abstract class Coyoneda[F[_], A] {
   def run(implicit F: Functor[F]): F[A] = ...
-  def trans[G[_]](f: F ~> G): Coyoneda[G, A] = ...
+  def mapK[G[_]](f: F ~> G): Coyoneda[G, A] = ...
   ...
 }
 object Coyoneda {
   implicit def functor[F[_], A]: Functor[Coyoneda[F, A]] = ...
 
-  private final case class Map[F[_], A, B](fa: F[A], f: A => B) extends Coyoneda[F, A]
-  def apply[F[_], A, B](sa: F[A])(f: A => B) = Map[F, A, B](sa, f)
-  def lift[F[_], A](sa: F[A]) = Map[F, A, A](sa, identity)
+  type Aux[F[_], A, B] = Coyoneda[F, A] { type Pivot = B }
+  def apply[F[_], A, B](fa: F[A])(f: A => B): Aux[F, B, A] =
+  def lift[F[_], A](fa: F[A]): Coyoneda[F, A] = ...
   ...
 }
 #+END_SRC
@@ -8062,16 +8029,15 @@ and there is also a contravariant version
 #+BEGIN_SRC scala
 sealed abstract class ContravariantCoyoneda[F[_], A] {
   def run(implicit F: Contravariant[F]): F[A] = ...
-  def trans[G[_]](f: F ~> G): ContravariantCoyoneda[G, A] = ...
+  def mapK[G[_]](f: F ~> G): ContravariantCoyoneda[G, A] = ...
   ...
 }
 object ContravariantCoyoneda {
   implicit def contravariant[F[_], A]: Contravariant[ContravariantCoyoneda[F, A]] = ...
 
-  private final case class Contramap[F[_], A, B](fa: F[A], f: B => A)
-    extends ContravariantCoyoneda[F, A]
-  def apply[F[_], A, B](sa: F[A])(f: B => A) = Contramap[F, A, B](sa, f)
-  def lift[F[_], A](sa: F[A]) = Contramap[F, A, A](sa, identity)
+  type Aux[F[_], A, B] = ContravariantCoyoneda[F, A] { type Pivot = B }
+  def apply[F[_], A, B](fa: F[A])(f: B => A): Aux[F, B, A] = ...
+  def lift[F[_], A](fa: F[A]): ContravariantCoyoneda[F, A] = ...
   ...
 }
 #+END_SRC
@@ -8081,15 +8047,15 @@ The colloquial for =Coyoneda= is /coyo/ and =ContravariantCoyoneda= is /cocoyo/.
 Just some Free Fun.
 #+END_ASIDE
 
-The API is somewhat simpler than =Free= and =FreeAp=, allowing a natural
-transformation with =.trans= and a =.run= (taking an actual =Functor= or
+The API is somewhat simpler than =Free= and =FreeApplicative=, allowing a natural
+transformation with =.mapK= and a =.run= (taking an actual =Functor= or
 =Contravariant=, respectively) to escape the free structure.
 
 Coyo and cocoyo can be a useful utility if we want to =.map= or =.contramap=
 over a type, and we know that we can convert into a data type that has a Functor
 but we don't want to commit to the final data structure too early. For example,
-we create a =Coyoneda[ISet, ?]= (recall =ISet= does not have a =Functor=) to use
-methods that require a =Functor=, then convert into =IList= later on.
+we create a =Coyoneda[Set, ?]= (note that =Set= does not have a =Functor=) to
+use methods that require a =Functor=, then convert into =List= later on.
 
 If we want to optimise a program with coyo or cocoyo we have to provide the
 expected boilerplate for each algebra:
@@ -8122,10 +8088,6 @@ avoiding intermediate representations. For example, if =xs= is a =List= of a
 thousand elements, we save two thousand object allocations because we only map
 over the data structure once.
 
-However it is arguably a lot easier to just make this kind of change in the
-original function by hand, or to wait for the [[https://github.com/scalaz/scalaz-plugin][=scalaz-plugin=]] project to be
-released and automatically perform these sorts of optimisations.
-
 # https://www.youtube.com/watch?v=H28QqxO7Ihc
 # https://www.youtube.com/watch?v=A-lmrvsUi2Y
 
@@ -8133,100 +8095,10 @@ released and automatically perform these sorts of optimisations.
 # - Programs that build data
 # - Programs that build programs
 
-**** Extensible Effects
-
-Programs are just data: free structures help to make this explicit and give us
-the ability to rearrange and optimise that data.
-
-=Free= is more special than it appears: it can sequence arbitrary algebras and
-typeclasses.
-
-For example, a free structure for =MonadState= is available. The =Ast= and
-=.liftF= are more complicated than usual because we have to account for the =S=
-type parameter on =MonadState=, and the inheritance from =Monad=:
-
-#+BEGIN_SRC scala
-object MonadState {
-  sealed abstract class Ast[S, A]
-  final case class Get[S]()     extends Ast[S, S]
-  final case class Put[S](s: S) extends Ast[S, Unit]
-
-  def liftF[F[_], S](implicit I: Ast[S, ?] :<: F) =
-    new MonadState[Free[F, ?], S] with BindRec[Free[F, ?]] {
-      def get       = Free.liftF(I.inj(Get[S]()))
-      def put(s: S) = Free.liftF(I.inj(Put[S](s)))
-
-      val delegate         = Free.freeMonad[F]
-      def point[A](a: =>A) = delegate.point(a)
-      ...
-    }
-  ...
-}
-#+END_SRC
-
-This gives us the opportunity to use optimised interpreters. For example, we
-could store the =S= in an atomic field instead of building up a nested =StateT=
-trampoline.
-
-We can create an =Ast= and =.liftF= for almost any algebra or typeclass! The
-only restriction is that the =F[_]= does not appear as a parameter to any of the
-instructions, i.e. it must be possible for the algebra to have an instance of
-=Functor=. This unfortunately rules out =MonadError= and =Monoid=.
-
-#+BEGIN_ASIDE
-The reason why free encodings do not work for all algebras and typeclasses is
-quite subtle.
-
-Consider what happens if we create an Ast for =MonadError=, with =F[_]= in
-contravariant position, i.e. as a parameter.
-
-#+BEGIN_SRC scala
-object MonadError {
-  sealed abstract class Ast[F[_], E, A]
-  final case class RaiseError[F[_], E, A](e: E) extends Ast[F, E, A]
-  final case class HandleError[F[_], E, A](fa: F[A], f: E => F[A]) extends Ast[F, E, A]
-
-  def liftF[F[_], E](implicit I: Ast[F, E, ?] :<: F): MonadError[F, E] = ...
-  ...
-}
-#+END_SRC
-
-When we come to interpret a program that uses =MonadError.Ast= we must construct
-the coproduct of instructions. Say we extend a =Drone= program:
-
-#+BEGIN_SRC scala
-type Ast[a] = Coproduct[MonadError.Ast[Ast, String, ?], Drone.Ast, a]
-#+END_SRC
-
-This fails to compile because =Ast= refers to itself!
-
-Algebras that are not entirely made of covariant functor signatures, i.e. =F[_]=
-in return position, are impossible to interpret because the resulting type of
-the program is self-referential. Indeed the name /algebra/ that we have been
-using has its roots in [[https://en.wikipedia.org/wiki/F-algebra][F-Algebras]], where the F is for Functor.
-
-/Thanks to Edmund Noble for initiating this discussion./
-
-# https://github.com/scalaz/scalaz/pull/1888
-#+END_ASIDE
-
-As the AST of a free program grows, performance degrades because the interpreter
-must match over instruction sets with an =O(n)= cost. An alternative to
-=scalaz.Coproduct= is [[https://github.com/frees-io/iota][iotaz]]'s encoding, which uses an optimised data structure
-to perform =O(1)= dynamic dispatch (using integers that are assigned to each
-coproduct at compiletime).
-
-For historical reasons a free AST for an algebra or typeclass is called /Initial
-Encoding/, and a direct implementation (e.g. with =IO=) is called /Finally
-Tagless/. Although we have explored interesting ideas with =Free=, it is
-generally accepted that finally tagless is superior. But to use finally tagless
-style, we need a high performance effect type that provides all the monad
-typeclasses we've covered in this chapter. We also still need to be able to run
-our =Applicative= code in parallel. This is exactly what we will cover next.
-
-# http://okmij.org/ftp/Haskell/extensible/more.pdf
-# http://okmij.org/ftp/Computation/free-monad.html
-# http://atnos-org.github.io/eff/
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** =Parallel=
 
@@ -10425,7 +10297,7 @@ To install Shapeless, add the following to =build.sbt=
 libraryDependencies += "com.chuusai" %% "shapeless" % "2.3.3"
 #+END_SRC
 
-At the core of Shapeless are the =HList= and =Coproduct= data types
+At the core of Shapeless are the =HList= and =EitherK= data types
 
 #+BEGIN_SRC scala
 package shapeless
@@ -10828,7 +10700,7 @@ without a runtime exception.
 **** Example: =Default=
 
 There are no new snares in the implementation of a typeclass with a type
-parameter in covariant position. Here we create =HList= and =Coproduct= values,
+parameter in covariant position. Here we create =HList= and =EitherK= values,
 and must provide a value for the =CNil= case as it corresponds to the case where
 no coproduct is able to provide a value.
 

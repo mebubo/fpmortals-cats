@@ -27,7 +27,8 @@ presented in this book.
 
 # Copyright Notice
 
-This book is a update of "Functional Programming for Mortals" by Sam Halliday.
+This book is an updated and revised edition of "Functional Programming for
+Mortals" by Sam Halliday.
 
 Like the original, this book uses the [Creative Commons Attribution ShareAlike
 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/legalcode) (CC BY-SA 4.0) license.
