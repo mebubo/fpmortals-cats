@@ -7235,3 +7235,159 @@ thousand elements, we save two thousand object allocations because we only map
 over the data structure once.
 
 
+## `Parallel`
+
+There are two effectful operations that we almost always want to run in
+parallel:
+
+1.  `.map` over a collection of effects, returning a single effect. This is
+    achieved by `.traverse`.
+2.  running a fixed number of effects with `.mapN` and combining their output,
+    delegating to `.map2`.
+
+However, in practice, neither of these operations execute in parallel by
+default. The reason is that if our `F[_]` is implemented by a `Monad`, then the
+derived combinator laws for `.map2` must be satisfied, which say
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait FlatMap[F[_]] extends Apply[F] {
+    ...
+    override def map2[A, B, Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] =
+      flatMap(fa)(a => map(fb)(b => f(a, b)))
+    ...
+  }
+~~~~~~~~
+
+In other words, **`Monad` is explicitly forbidden from running effects in
+parallel.**
+
+However, if we have an `F[_]` that is **not** monadic, then it may implement
+`.map2` in parallel. However, this is very impractical for most applications, so
+Cats provides the `Parallel` typeclass which gives us a way of moving from the
+current (sequential) context into a parallel one where `.traverse` and `.mapN`
+run effects in parallel:
+
+{lang="text"}
+~~~~~~~~
+  trait NonEmptyParallel[M[_]] {
+    type F[_]
+  
+    def sequential: F ~> M
+    def parallel: M ~> F
+  }
+  trait Parallel[M[_]] extends NonEmptyParallel[M]
+~~~~~~~~
+
+Monadic programs can then request an implicit `Parallel` in addition to their `Monad`
+
+{lang="text"}
+~~~~~~~~
+  def foo[F[_]: Monad: Parallel]: F[Unit] = ...
+~~~~~~~~
+
+There are also convenience functions `.parTraverse`, `.parMapN` (and more) that
+can be used as direct replacements for `.traverse` and `.mapN`.
+
+If the implicit `Parallel[IO]` is in scope, we can choose between
+sequential and parallel traversal:
+
+{lang="text"}
+~~~~~~~~
+  val input: List[String] = ...
+  def network(in: String): IO[Int] = ...
+  
+  input.traverse(network): IO[List[Int]] // one at a time
+  input.parTraverse(network): IO[List[Int]] // all in parallel
+~~~~~~~~
+
+Similarly, we can call `.parMapN`
+
+{lang="text"}
+~~~~~~~~
+  val fa: IO[String] = ...
+  val fb: IO[String] = ...
+  val fc: IO[String] = ...
+  
+  (fa, fb, fc).parMapN { case (a, b, c) => a + b + c }: IO[String]
+~~~~~~~~
+
+It is worth noting that when we have `Applicative` programs, such as
+
+{lang="text"}
+~~~~~~~~
+  def foo[F[_]: Applicative]: F[Unit] = ...
+~~~~~~~~
+
+we can use the `F[_]` that we obtain from `Parallel.parallel` as our program's
+context and get parallelism as the default on `.traverse` and `.mapN`.
+Converting between the raw and `Parallel` context must be handled manually in
+the glue code.
+
+
+### Breaking the Law
+
+We can take a more daring approach to parallelism: opt-out of the law that
+`.map2` must be sequential for `Monad`. This is highly controversial, but
+works well for the majority of real world applications. We must first audit our
+codebase (including third party dependencies) to ensure that nothing is making
+use of the `.map2` implied law.
+
+We wrap `IO`
+
+{lang="text"}
+~~~~~~~~
+  final class MyIO[A](val io: IO[A]) extends AnyVal
+~~~~~~~~
+
+and provide our own implementation of `Monad` which runs `.map2` to `.map22` in
+parallel by delegating to the `Parallel` instance
+
+{lang="text"}
+~~~~~~~~
+  object MyIO {
+    implicit val monad: Monad[MyIO] = new Monad[MyIO] {
+      override def map2[A, B, C](fa: MyIO[A], fb: MyIO[B])(f: (A, B) => C): MyIO[C] =
+        (fa.io, fb.io).parMapN(f)
+      ...
+    }
+  }
+~~~~~~~~
+
+We can now use `MyIO` as our application's context instead of `IO`, and **get
+parallelism by default**.
+
+A> Wrapping an existing type and providing custom typeclass instances is known as
+A> *newtyping*.
+A> 
+A> The `@newtype` macro [by Cary Robbins](https://github.com/estatico/scala-newtype) has an optimised runtime representation
+A> (more efficient than `extends AnyVal`), that makes it easy to delegate
+A> typeclasses that we do not wish to customise. For example, we can customise
+A> `Monad` but delegate the `Alternative`:
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   @newtype class MyIO[A](io: IO[A])
+A>   object MyIO {
+A>     implicit val monad: Monad[MyIO] = ...
+A>     implicit val alternative: Alternative[MyIO] = derived
+A>   }
+A> ~~~~~~~~
+
+For completeness: a naive and inefficient implementation of the implementation
+of `.parMap2` for our toy `IO` could use `Future`:
+
+{lang="text"}
+~~~~~~~~
+  def parMap2[A, B, C](fa: IO[A], fb: IO[B])(f: (A, B) => C): IO[C] = IO {
+    val forked = Future { fa.interpret() }
+    val b      = fb.interpret()
+    val a      = Await.result(forked, Duration.Inf)
+    f(a, b)
+  }
+~~~~~~~~
+
+In the final section of this chapter we will see how Cats' `IO` is actually
+implemented.
+
+

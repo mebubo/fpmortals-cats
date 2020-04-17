@@ -8095,30 +8095,25 @@ over the data structure once.
 # - Programs that build data
 # - Programs that build programs
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 *** =Parallel=
 
 There are two effectful operations that we almost always want to run in
 parallel:
 
 1. =.map= over a collection of effects, returning a single effect. This is
-   achieved by =.traverse=, which delegates to the effect's =.apply2=.
-2. running a fixed number of effects with the /scream operator/ =|@|=, and
-   combining their output, again delegating to =.apply2=.
+   achieved by =.traverse=.
+2. running a fixed number of effects with =.mapN= and combining their output,
+   delegating to =.map2=.
 
 However, in practice, neither of these operations execute in parallel by
 default. The reason is that if our =F[_]= is implemented by a =Monad=, then the
-derived combinator laws for =.apply2= must be satisfied, which say
+derived combinator laws for =.map2= must be satisfied, which say
 
 #+BEGIN_SRC scala
-@typeclass trait Bind[F[_]] extends Apply[F] {
+@typeclass trait FlatMap[F[_]] extends Apply[F] {
   ...
-  override def apply2[A, B, C](fa: =>F[A], fb: =>F[B])(f: (A, B) => C): F[C] =
-    bind(fa)(a => map(fb)(b => f(a, b)))
+  override def map2[A, B, Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] =
+    flatMap(fa)(a => map(fb)(b => f(a, b)))
   ...
 }
 #+END_SRC
@@ -8127,55 +8122,49 @@ In other words, *=Monad= is explicitly forbidden from running effects in
 parallel.*
 
 However, if we have an =F[_]= that is *not* monadic, then it may implement
-=.apply2= in parallel. We can use the =@@= (tag) mechanism to create an instance
-of =Applicative= for =F[_] @@ Parallel=, which is conveniently assigned to the
-type alias =Applicative.Par=
+=.map2= in parallel. However, this is very impractical for most applications, so
+Cats provides the =Parallel= typeclass which gives us a way of moving from the
+current (sequential) context into a parallel one where =.traverse= and =.mapN=
+run effects in parallel:
 
 #+BEGIN_SRC scala
-object Applicative {
-  type Par[F[_]] = Applicative[λ[α => F[α] @@ Tags.Parallel]]
-  ...
+trait NonEmptyParallel[M[_]] {
+  type F[_]
+
+  def sequential: F ~> M
+  def parallel: M ~> F
 }
+trait Parallel[M[_]] extends NonEmptyParallel[M]
 #+END_SRC
 
-Monadic programs can then request an implicit =Par= in addition to their =Monad=
+Monadic programs can then request an implicit =Parallel= in addition to their =Monad=
 
 #+BEGIN_SRC scala
-def foo[F[_]: Monad: Applicative.Par]: F[Unit] = ...
+def foo[F[_]: Monad: Parallel]: F[Unit] = ...
 #+END_SRC
 
-Scalaz's =Traverse= syntax supports parallelism:
+There are also convenience functions =.parTraverse=, =.parMapN= (and more) that
+can be used as direct replacements for =.traverse= and =.mapN=.
 
-#+BEGIN_SRC scala
-implicit class TraverseSyntax[F[_], A](self: F[A]) {
-  ...
-  def parTraverse[G[_], B](f: A => G[B])(
-    implicit F: Traverse[F], G: Applicative.Par[G]
-  ): G[F[B]] = Tag.unwrap(F.traverse(self)(a => Tag(f(a))))
-}
-#+END_SRC
-
-If the implicit =Applicative.Par[IO]= is in scope, we can choose between
+If the implicit =Parallel[IO]= is in scope, we can choose between
 sequential and parallel traversal:
 
 #+BEGIN_SRC scala
-  val input: IList[String] = ...
+  val input: List[String] = ...
   def network(in: String): IO[Int] = ...
 
-  input.traverse(network): IO[IList[Int]] // one at a time
-  input.parTraverse(network): IO[IList[Int]] // all in parallel
+  input.traverse(network): IO[List[Int]] // one at a time
+  input.parTraverse(network): IO[List[Int]] // all in parallel
 #+END_SRC
 
-Similarly, we can call =.parApply= or =.parTupled= after using scream operators
+Similarly, we can call =.parMapN=
 
 #+BEGIN_SRC scala
   val fa: IO[String] = ...
   val fb: IO[String] = ...
   val fc: IO[String] = ...
 
-  (fa |@| fb).parTupled: IO[(String, String)]
-
-  (fa |@| fb |@| fc).parApply { case (a, b, c) => a + b + c }: IO[String]
+  (fa, fb, fc).parMapN { case (a, b, c) => a + b + c }: IO[String]
 #+END_SRC
 
 It is worth noting that when we have =Applicative= programs, such as
@@ -8184,23 +8173,18 @@ It is worth noting that when we have =Applicative= programs, such as
 def foo[F[_]: Applicative]: F[Unit] = ...
 #+END_SRC
 
-we can use =F[A] @@ Parallel= as our program's context and get parallelism as
-the default on =.traverse= and =|@|=. Converting between the raw and =@@
-Parallel= versions of =F[_]= must be handled manually in the glue code, which
-can be painful. Therefore it is often easier to simply request both forms of
-=Applicative=
-
-#+BEGIN_SRC scala
-def foo[F[_]: Applicative: Applicative.Par]: F[Unit] = ...
-#+END_SRC
+we can use the =F[_]= that we obtain from =Parallel.parallel= as our program's
+context and get parallelism as the default on =.traverse= and =.mapN=.
+Converting between the raw and =Parallel= context must be handled manually in
+the glue code.
 
 **** Breaking the Law
 
 We can take a more daring approach to parallelism: opt-out of the law that
-=.apply2= must be sequential for =Monad=. This is highly controversial, but
+=.map2= must be sequential for =Monad=. This is highly controversial, but
 works well for the majority of real world applications. We must first audit our
 codebase (including third party dependencies) to ensure that nothing is making
-use of the =.apply2= implied law.
+use of the =.map2= implied law.
 
 We wrap =IO=
 
@@ -8208,14 +8192,14 @@ We wrap =IO=
 final class MyIO[A](val io: IO[A]) extends AnyVal
 #+END_SRC
 
-and provide our own implementation of =Monad= which runs =.apply2= in parallel
-by delegating to a =@@ Parallel= instance
+and provide our own implementation of =Monad= which runs =.map2= to =.map22= in
+parallel by delegating to the =Parallel= instance
 
 #+BEGIN_SRC scala
 object MyIO {
   implicit val monad: Monad[MyIO] = new Monad[MyIO] {
-    override def apply2[A, B, C](fa: MyIO[A], fb: MyIO[B])(f: (A, B) => C): MyIO[C] =
-      Applicative[IO.Par].apply2(fa.io, fb.io)(f)
+    override def map2[A, B, C](fa: MyIO[A], fb: MyIO[B])(f: (A, B) => C): MyIO[C] =
+      (fa.io, fb.io).parMapN(f)
     ...
   }
 }
@@ -8228,136 +8212,56 @@ parallelism by default*.
 Wrapping an existing type and providing custom typeclass instances is known as
 /newtyping/.
 
-=@@= and newtyping are complementary: =@@= allows us to request specific
-typeclass variants on our domain model, whereas newtyping allow us to define the
-instances on the implementation. Same thing, different insertion points.
-
 The =@newtype= macro [[https://github.com/estatico/scala-newtype][by Cary Robbins]] has an optimised runtime representation
 (more efficient than =extends AnyVal=), that makes it easy to delegate
 typeclasses that we do not wish to customise. For example, we can customise
-=Monad= but delegate the =Plus=:
+=Monad= but delegate the =Alternative=:
 
 #+BEGIN_SRC scala
 @newtype class MyIO[A](io: IO[A])
 object MyIO {
   implicit val monad: Monad[MyIO] = ...
-  implicit val plus: Plus[MyIO] = derived
+  implicit val alternative: Alternative[MyIO] = derived
 }
 #+END_SRC
 #+END_ASIDE
 
-For completeness: a naive and inefficient implementation of =Applicative.Par=
-for our toy =IO= could use =Future=:
+For completeness: a naive and inefficient implementation of the implementation
+of =.parMap2= for our toy =IO= could use =Future=:
 
 #+BEGIN_SRC scala
-object IO {
-  ...
-  type Par[a] = IO[a] @@ Parallel
-  implicit val ParApplicative = new Applicative[Par] {
-    override def apply2[A, B, C](fa: =>Par[A], fb: =>Par[B])(f: (A, B) => C): Par[C] =
-      Tag(
-        IO {
-          val forked = Future { Tag.unwrap(fa).interpret() }
-          val b      = Tag.unwrap(fb).interpret()
-          val a      = Await.result(forked, Duration.Inf)
-          f(a, b)
-        }
-      )
-}
+    def parMap2[A, B, C](fa: IO[A], fb: IO[B])(f: (A, B) => C): IO[C] = IO {
+      val forked = Future { fa.interpret() }
+      val b      = fb.interpret()
+      val a      = Await.result(forked, Duration.Inf)
+      f(a, b)
+    }
 #+END_SRC
 
-and due to [[https://github.com/scala/bug/issues/10954][a bug in the Scala compiler]] that treats all =@@= instances as
-orphans, we must explicitly import the implicit:
-
-#+BEGIN_SRC scala
-import IO.ParApplicative
-#+END_SRC
-
-In the final section of this chapter we will see how Scalaz's =IO= is actually
+In the final section of this chapter we will see how Cats' =IO= is actually
 implemented.
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** =IO=
 
-Scalaz's =IO= is the fastest asynchronous programming construct in the Scala
-ecosystem: up to 50 times faster than =Future=. =IO= is a free data structure
-specialised for use as a general effect monad.
+=IO= is a free data structure specialised for use as a general effect monad.
 
 #+BEGIN_SRC scala
-sealed abstract class IO[E, A] { ... }
+sealed abstract class IO[A] { ... }
 object IO {
-  private final class FlatMap         ... extends IO[E, A]
-  private final class Point           ... extends IO[E, A]
-  private final class Strict          ... extends IO[E, A]
-  private final class SyncEffect      ... extends IO[E, A]
-  private final class Fail            ... extends IO[E, A]
-  private final class AsyncEffect     ... extends IO[E, A]
+  private final class Pure         ... extends IO[A]
+  private final class Delay        ... extends IO[A]
+  private final class RaiseError   ... extends IO[A]
+  private final class Suspend      ... extends IO[A]
+  private final class Bind         ... extends IO[A]
+  private final class Map          ... extends IO[A]
   ...
 }
 #+END_SRC
-
-=IO= has *two* type parameters: it has a =Bifunctor= allowing the error type to
-be an application specific ADT. But because we are on the JVM, and must interact
-with legacy libraries, a convenient type alias is provided that uses exceptions
-for the error type:
-
-#+BEGIN_SRC scala
-  type Task[A] = IO[Throwable, A]
-#+END_SRC
-
-#+BEGIN_ASIDE
-=scalaz.ioeffect.IO= is a high performance =IO= by REDACTED. It has a separate
-lifecycle to the core Scalaz library and must be manually added to our
-=build.sbt= with
-
-#+BEGIN_SRC scala
-libraryDependencies += "org.scalaz" %% "scalaz-ioeffect" % "2.10.1"
-#+END_SRC
-
-Do not use the deprecated =scalaz-effect= and =scalaz-concurrency= packages.
-
-Prefer the =scalaz.ioeffect= variants of all typeclasses and data types.
-#+END_ASIDE
-
-# https://www.youtube.com/watch?v=Eihz7kqn6mU
-
-# benchmarks/jmh:run -i 5 -wi 5 -f1 -t2 -w2 -r2 .*
-# # Run complete. Total time: 00:11:50
-# Benchmark                                       (depth)  (size)   Mode  Cnt          Score          Error  Units
-# ArrayFillBenchmarks.catsArrayFill                   N/A   10000  thrpt    5       8222.592 ±      262.246  ops/s
-# ArrayFillBenchmarks.monixArrayFill                  N/A   10000  thrpt    5       8455.779 ±      613.571  ops/s
-# ArrayFillBenchmarks.scalazArrayFill                 N/A   10000  thrpt    5      18232.371 ±      453.343  ops/s
-# BubbleSortBenchmarks.catsBubbleSort                 N/A    1000  thrpt    5         89.523 ±        2.457  ops/s
-# BubbleSortBenchmarks.monixBubbleSort                N/A    1000  thrpt    5         91.809 ±        1.767  ops/s
-# BubbleSortBenchmarks.scalazBubbleSort               N/A    1000  thrpt    5        129.307 ±        2.003  ops/s
-# IODeepAttemptBenchmark.catsDeepAttempt             1000     N/A  thrpt    5      40512.131 ±      783.616  ops/s
-# IODeepAttemptBenchmark.futureDeepAttempt           1000     N/A  thrpt    5      10208.526 ±      167.039  ops/s
-# IODeepAttemptBenchmark.monixDeepAttempt            1000     N/A  thrpt    5      41298.849 ±     1460.146  ops/s
-# IODeepAttemptBenchmark.scalazDeepAttempt           1000     N/A  thrpt    5      46187.262 ±     1790.767  ops/s
-# IODeepAttemptBenchmark.thunkDeepAttempt            1000     N/A  thrpt    5      30266.824 ±      634.086  ops/s
-# IODeepFlatMapBenchmark.catsDeepFlatMap               20     N/A  thrpt    5       4026.655 ±      100.745  ops/s
-# IODeepFlatMapBenchmark.futureDeepFlatMap             20     N/A  thrpt    5        131.566 ±        1.188  ops/s
-# IODeepFlatMapBenchmark.monixDeepFlatMap              20     N/A  thrpt    5       3570.778 ±       63.175  ops/s
-# IODeepFlatMapBenchmark.scalazDeepFlatMap             20     N/A  thrpt    5       3907.726 ±      261.831  ops/s
-# IODeepFlatMapBenchmark.thunkDeepFlatMap              20     N/A  thrpt    5       4251.012 ±      128.777  ops/s
-# IOLeftBindBenchmark.catsLeftBindBenchmark           100   10000  thrpt    5       9036.734 ±      245.864  ops/s
-# IOLeftBindBenchmark.futureLeftBindBenchmark         100   10000  thrpt    5        396.114 ±        5.405  ops/s
-# IOLeftBindBenchmark.monixLeftBindBenchmark          100   10000  thrpt    5       7145.843 ±      181.664  ops/s
-# IOLeftBindBenchmark.scalazLeftBindBenchmark         100   10000  thrpt    5      11354.589 ±      379.889  ops/s
-# IOLeftBindBenchmark.thunkLeftBindBenchmark          100   10000  thrpt    5  997401060.687 ±  5389516.539  ops/s
-# IOMapBenchmark.catsMap                              500     N/A  thrpt    5     124230.424 ±     3096.434  ops/s
-# IOMapBenchmark.futureMap                            500     N/A  thrpt    5      15050.309 ±     2869.725  ops/s
-# IOMapBenchmark.monixMap                             500     N/A  thrpt    5     124979.926 ±     3156.908  ops/s
-# IOMapBenchmark.scalazMap                            500     N/A  thrpt    5     126334.603 ±     9496.260  ops/s
-# IOMapBenchmark.thunkMap                             500     N/A  thrpt    5     122862.554 ±     5301.997  ops/s
-# IONarrowFlatMapBenchmark.catsNarrowFlatMap          N/A   10000  thrpt    5      13273.883 ±     1778.012  ops/s
-# IONarrowFlatMapBenchmark.futureNarrowFlatMap        N/A   10000  thrpt    5        361.044 ±       16.853  ops/s
-# IONarrowFlatMapBenchmark.monixNarrowFlatMap         N/A   10000  thrpt    5      15137.902 ±      970.714  ops/s
-# IONarrowFlatMapBenchmark.scalazNarrowFlatMap        N/A   10000  thrpt    5      16024.170 ±      661.342  ops/s
-# IONarrowFlatMapBenchmark.thunkNarrowFlatMap         N/A   10000  thrpt    5  990969244.629 ± 18968654.949  ops/s
-# IOShallowAttemptBenchmark.catsShallowAttempt       1000     N/A  thrpt    5       4234.260 ±      346.703  ops/s
-# IOShallowAttemptBenchmark.futureShallowAttempt     1000     N/A  thrpt    5        768.406 ±        7.250  ops/s
-# IOShallowAttemptBenchmark.scalazShallowAttempt     1000     N/A  thrpt    5       3750.653 ±      620.466  ops/s
-# IOShallowAttemptBenchmark.thunkShallowAttempt      1000     N/A  thrpt    5         91.027 ±        1.189  ops/s
 
 **** Creating
 
@@ -8366,32 +8270,16 @@ safe and unsafe code blocks:
 
 #+BEGIN_SRC scala
 object IO {
+  // delayed evaluation of side-effecting / non-total code block
+  def apply[A](a: =>A): IO[A] = ...
   // eager evaluation of an existing value
-  def now[E, A](a: A): IO[E, A] = ...
-  // lazy evaluation of a pure calculation
-  def point[E, A](a: =>A): IO[E, A] = ...
-  // lazy evaluation of a side-effecting, yet Total, code block
-  def sync[E, A](effect: =>A): IO[E, A] = ...
-  // lazy evaluation of a side-effecting code block that may fail
-  def syncThrowable[A](effect: =>A): IO[Throwable, A] = ...
-
+  def pure[E, A](a: A): IO[A] = ...
   // create a failed IO
-  def fail[E, A](error: E): IO[E, A] = ...
-  // asynchronously sleeps for a specific period of time
-  def sleep[E](duration: Duration): IO[E, Unit] = ...
+  def raiseError[A](error: Throwable): IO[A] = ...
+  // convert a delayed Future into an IO
+  def fromFuture[A](iof: IO[Future[A]])(implicit cs: ContextShift[IO]): IO[A] = ...
   ...
 }
-#+END_SRC
-
-with convenient =Task= constructors:
-
-#+BEGIN_SRC scala
-  object Task {
-    def apply[A](effect: =>A): Task[A] = IO.syncThrowable(effect)
-    def now[A](effect: A): Task[A] = IO.now(effect)
-    def fail[A](error: Throwable): Task[A] = IO.fail(error)
-    def fromFuture[E, A](io: Task[Future[A]])(ec: ExecutionContext): Task[A] = ...
-  }
 #+END_SRC
 
 The most common constructors, by far, when dealing with legacy code are
@@ -8854,7 +8742,7 @@ Before we proceed, here is a quick recap of the core Scalaz typeclasses:
 
 @typeclass trait Applicative[F[_]] extends Functor[F] {
   def point[A](a: =>A): F[A]
-  def apply2[A,B,C](fa: =>F[A], fb: =>F[B])(f: (A, B) => C): F[C] = ...
+  def map2[A,B,C](fa: =>F[A], fb: =>F[B])(f: (A, B) => C): F[C] = ...
   ...
   def apply12[...]
 }
@@ -9193,7 +9081,7 @@ The equivalent for type parameters in covariant position is =Applicative=:
 object Bar {
   ...
   implicit val default: Default[Bar] =
-    Applicative[Default].apply2(Default[String], Default[Int])(Bar(_, _))
+    Applicative[Default].map2(Default[String], Default[Int])(Bar(_, _))
 }
 #+END_SRC
 
@@ -9341,7 +9229,7 @@ The four core typeclasses have symmetric signatures:
 
 | Typeclass     | method    | given          | signature         | returns |
 |---------------+-----------+----------------+-------------------+---------|
-| ~Applicative~ | ~apply2~  | ~F[A1], F[A2]~ | ~(A1, A2) => Z~   | ~F[Z]~  |
+| ~Applicative~ | ~map2~    | ~F[A1], F[A2]~ | ~(A1, A2) => Z~   | ~F[Z]~  |
 | ~Alt~         | ~altly2~  | ~F[A1], F[A2]~ | ~(A1 \/ A2) => Z~ | ~F[Z]~  |
 | ~Divisible~   | ~divide2~ | ~F[A1], F[A2]~ | ~Z => (A1, A2)~   | ~F[Z]~  |
 | ~Decidable~   | ~choose2~ | ~F[A1], F[A2]~ | ~Z => (A1 \/ A2)~ | ~F[Z]~  |
@@ -9424,12 +9312,12 @@ implicit val monad = new IsomorphismMonadError[Default, K, String] with Alt[Defa
 
 #+BEGIN_ASIDE
 The primitive of =Alt= is =alt=, much as the primitive of =Applicative= is =ap=,
-but it often makes more sense to use =altly2= and =apply2= as the primitives
+but it often makes more sense to use =altly2= and =map2= as the primitives
 with the following overrides:
 
 #+BEGIN_SRC scala
   override def ap[A, B](fa: =>F[A])(f: =>F[A => B]): F[B] =
-    apply2(fa, f)((a, abc) => abc(a))
+    map2(fa, f)((a, abc) => abc(a))
 
   override def alt[A](a1: =>F[A], a2: =>F[A]): F[A] = altly2(a1, a2) {
     case -\/(a) => a
@@ -10743,7 +10631,7 @@ object DerivedDefault {
 #+END_SRC
 
 Much as we could draw an analogy between =Equal= and =Decidable=, we can see the
-relationship to =Alt= in =.point= (=hnil=), =.apply2= (=.hcons=) and =.altly2=
+relationship to =Alt= in =.point= (=hnil=), =.map2= (=.hcons=) and =.altly2=
 (=.ccons=).
 
 There is little to be learned from an example like =Semigroup=, so we will skip
@@ -12662,7 +12550,7 @@ release.
 | ~Contravariant~    | ~contramap~     | ~F[A]~          | ~B => A~               | ~F[B]~         |
 | ~Functor~          | ~map~           | ~F[A]~          | ~A => B~               | ~F[B]~         |
 | ~Apply~            | ~ap~ / ~<*>~    | ~F[A]~          | ~F[A => B]~            | ~F[B]~         |
-|                    | ~apply2~        | ~F[A], F[B]~    | ~(A, B) => C~          | ~F[C]~         |
+|                    | ~map2~          | ~F[A], F[B]~    | ~(A, B) => C~          | ~F[C]~         |
 | ~Alt~              | ~altly2~        | ~F[A], F[B]~    | ~(A \/ B) => C~        | ~F[C]~         |
 | ~Divide~           | ~divide2~       | ~F[A], F[B]~    | ~C => (A, B)~          | ~F[C]~         |
 | ~Decidable~        | ~choose2~       | ~F[A], F[B]~    | ~C => (A \/ B)~        | ~F[C]~         |
