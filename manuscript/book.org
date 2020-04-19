@@ -8241,11 +8241,6 @@ of =.parMap2= for our toy =IO= could use =Future=:
 In the final section of this chapter we will see how Cats' =IO= is actually
 implemented.
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 *** =IO=
 
 =IO= is a free data structure specialised for use as a general effect monad.
@@ -8277,141 +8272,254 @@ object IO {
   // create a failed IO
   def raiseError[A](error: Throwable): IO[A] = ...
   // convert a delayed Future into an IO
-  def fromFuture[A](iof: IO[Future[A]])(implicit cs: ContextShift[IO]): IO[A] = ...
+  def fromFuture[A](iof: IO[Future[A]])(implicit C: ContextShift[IO]): IO[A] = ...
+  // asynchronously sleeps for a specific period of time
+  def sleep(d: FiniteDuration)(implicit T: Timer[IO]): IO[Unit] = ...
   ...
 }
 #+END_SRC
 
-The most common constructors, by far, when dealing with legacy code are
-=Task.apply= and =Task.fromFuture=:
+We would typically create one =ContextShift= and =Timer= to be shared by the
+entire application with
 
 #+BEGIN_SRC scala
-val fa: Task[Future[String]] = Task { ... impure code here ... }
+import scala.concurrent.ExecutionContext.global
 
-Task.fromFuture(fa)(ExecutionContext.global): Task[String]
+implicit val shift: ContextShift[IO] = IO.shift(global)
+implicit val timer: Timer[IO] = IO.timer(global)
+#+END_SRC
+
+but specific implementations can be provided during testing to override the
+behaviour or if a custom thread pool is required in production.
+
+The most common constructors, by far, when dealing with legacy code are
+=IO.apply= and =IO.fromFuture=:
+
+#+BEGIN_SRC scala
+val fa: IO[Future[String]] = IO { ... impure code here ... }
+
+IO.fromFuture(fa): IO[String]
 #+END_SRC
 
 We cannot pass around raw =Future=, because it eagerly evaluates, so must always
 be constructed inside a safe block.
 
-Note that the =ExecutionContext= is *not* =implicit=, contrary to the
-convention. Recall that in Scalaz we reserve the =implicit= keyword for
-typeclass derivation, to simplify the language: =ExecutionContext= is
-configuration that must be provided explicitly.
-
 **** Running
 
-The =IO= interpreter is called =RTS=, for /runtime system/. Its implementation
-is beyond the scope of this book. We will instead focus on the features that
-=IO= provides.
-
 =IO= is just a data structure, and is interpreted /at the end of the world/ by
-extending =SafeApp= and implementing =.run=
+extending =IOApp= and implementing =.run=
 
 #+BEGIN_SRC scala
-trait SafeApp extends RTS {
+trait IOApp {
+  def run(args: List[String]): IO[ExitCode]
 
-  sealed trait ExitStatus
-  object ExitStatus {
-    case class ExitNow(code: Int)                         extends ExitStatus
-    case class ExitWhenDone(code: Int, timeout: Duration) extends ExitStatus
-    case object DoNotExit                                 extends ExitStatus
-  }
+  final def main(args: Array[String]): Unit = ... calls run ...
+}
 
-  def run(args: List[String]): IO[Void, ExitStatus]
-
-  final def main(args0: Array[String]): Unit = ... calls run ...
+sealed abstract class ExitCode
+object ExitCode {
+  object Success extends ExitCode
+  object Error extends ExitCode
 }
 #+END_SRC
 
-#+BEGIN_ASIDE
-=Void= is a type that has no values, like =scala.Nothing=. However, the Scala
-compiler infers =Nothing= when it fails to correctly infer a type parameter,
-causing confusing error messages, whereas =Void= will fail fast during
-compilation.
-
-A =Void= error type means that the effect *cannot fail*, which is to say that we
-have handled all errors by this point.
-#+END_ASIDE
-
 If we are integrating with a legacy system and are not in control of the entry
-point of our application, we can extend the =RTS= and gain access to unsafe
-methods to evaluate the =IO= at the entry point to our principled FP code.
+point of our application, we can also call a variety of =.unsafe*= methods
+depending on our usecase, the most commonly used being:
+
+#+BEGIN_SRC scala
+sealed abstract class IO[A] {
+  def unsafeRunSync(): A = ...
+  def unsafeToFuture(): Future[A] = ...
+  ...
+}
+#+END_SRC
 
 **** Features
 
-=IO= provides typeclass instances for =Bifunctor=, =MonadError[E, ?]=,
-=BindRec=, =Plus=, =MonadPlus= (if =E= forms a =Monoid=), and an
-=Applicative[IO.Par[E, ?]]=.
+=IO= provides a typeclass instance for =MonadError[Throwable, ?]= along with new
+typeclasses that are introduced by =cats-effect=
 
-In addition to the functionality from the typeclasses, there are implementation
-specific methods:
+#+BEGIN_SRC dot :file images/cats-effect.png :exports results
+digraph G {
+    graph [dpi=300, rankdir=BT];
+    node [fontname=Hack];
+
+    MonadError [style=dotted];
+    Bracket;
+    Defer;
+    Sync;
+    LiftIO;
+    Async;
+    Effect;
+    Concurrent;
+    ConcurrentEffect;
+
+    Bracket -> MonadError;
+    Sync -> Bracket;
+    Sync -> Defer;
+    Async -> LiftIO;
+    Async -> Sync;
+    Effect -> Async;
+    Concurrent -> Async;
+    ConcurrentEffect -> Concurrent;
+    ConcurrentEffect -> Effect;
+}
+#+END_SRC
+
+#+CAPTION: 70
+#+RESULTS:
+[[file:images/cats-effect.png]]
+
+***** =Bracket=
+
+=Bracket= is for safe resource acquisition and release.
 
 #+BEGIN_SRC scala
-sealed abstract class IO[E, A] {
-  // retries an action N times, until success
-  def retryN(n: Int): IO[E, A] = ...
-  // ... with exponential backoff
-  def retryBackoff(n: Int, factor: Double, duration: Duration): IO[E, A] = ...
-
-  // repeats an action with a pause between invocations, until it fails
-  def repeat[B](interval: Duration): IO[E, B] = ...
-
-  // cancel the action if it does not complete within the timeframe
-  def timeout(duration: Duration): IO[E, Maybe[A]] = ...
-
-  // runs `release` on success or failure.
-  // Note that IO[Void, Unit] cannot fail.
-  def bracket[B](release: A => IO[Void, Unit])(use: A => IO[E, B]): IO[E, B] = ...
-  // alternative syntax for bracket
-  def ensuring(finalizer: IO[Void, Unit]): IO[E, A] =
-  // ignore failure and success, e.g. to ignore the result of a cleanup action
-  def ignore: IO[Void, Unit] = ...
-
-  // runs two effects in parallel
-  def par[B](that: IO[E, B]): IO[E, (A, B)] = ...
+@typeclass trait Bracket[F[_], E] extends MonadError[F, E] {
+  def bracket[A, B](acquire: F[A])(use: A => F[B])(release: A => F[Unit]): F[B]
+  def guarantee[A](fa: F[A])(finalizer: F[Unit]): F[A] = ...
   ...
+}
 #+END_SRC
 
-It is possible for an =IO= to be in a /terminated/ state, which represents work
-that is intended to be discarded (it is neither an error nor a success). The
-utilities related to termination are:
+=.bracket= is the most powerful part of the interface, allowing us to define how
+we obtain a resource, what we do with it, and anything we need to do to release
+it. The =release= is guaranteed to be called even if the =use= fails, the
+convenience =.guarantee= can be used if we only need a cleanup step without the
+=acquire=.
+
+In addition to success and failure, a calculation can also be canceled and we
+may cleanup differently depending on these three scenarios with =.bracketCase=:
 
 #+BEGIN_SRC scala
-...
-  // terminate whatever actions are running with the given throwable.
-  // bracket / ensuring is honoured.
-  def terminate[E, A](t: Throwable): IO[E, A] = ...
+sealed abstract class ExitCase[+E]
+object ExitCase {
+  case object Completed extends ExitCase[Nothing]
+  final case class Error[+E](e: E) extends ExitCase[E]
+  case object Canceled extends ExitCase[Nothing]
+  ...
+}
 
-  // runs two effects in parallel, return the winner and terminate the loser
-  def race(that: IO[E, A]): IO[E, A] = ...
+@typeclass trait Bracket[F[_], E] extends MonadError[F, E] {
+  ...
+  def bracketCase[A, B](acquire: F[A])(use: A => F[B])
+        (release: (A, ExitCase[E]) => F[Unit]): F[B]
 
-  // ignores terminations
-  def uninterruptibly: IO[E, A] = ...
-...
+  def uncancelable[A](fa: F[A]): F[A]
+}
 #+END_SRC
 
-**** =Fiber=
+The ability to =.cancel= a calculation is left up to the implementation and is
+not part of the =Bracket= interface.
 
-An =IO= may spawn /fibers/, a lightweight abstraction over a JVM =Thread=. We
-can =.fork= an =IO=, and =.supervise= any incomplete fibers to ensure that they
-are terminated when the =IO= action completes
+***** =Defer=
+
+=Defer= is the higher kinded equivalent of =Eval.always=
 
 #+BEGIN_SRC scala
-...
-  def fork[E2]: IO[E2, Fiber[E, A]] = ...
-  def supervised(error: Throwable): IO[E, A] = ...
-...
+@typeclass trait Defer[F[_]] {
+  def defer[A](fa: => F[A]): F[A]
+}
 #+END_SRC
 
-When we have a =Fiber= we can =.join= back into the =IO=, or =interrupt= the
+and is useful when we want to avoid an expensive calculation until it is
+necessary.
+
+***** =Sync=
+
+=Sync= refines the =Bracket= (and =MonadError=) error type to =Throwable= and
+introduces =.suspend=, which is effectively the same as =Defer.defer= but
+explicitly for effects, and =.delay= as the mechanism for side-effecting blocks
+of code. =Sync.delay= is the generalised version of =IO { ... }=
+
+#+BEGIN_SRC scala
+@typeclass trait Sync[F[_]] extends Bracket[F, Throwable] with Defer[F] {
+  def suspend[A](thunk: => F[A]): F[A]
+  def delay[A](thunk: => A): F[A] = ...
+}
+#+END_SRC
+
+***** =LiftIO=
+
+We have already been introduced to =LiftIO= in the context of lifting =IO=
+interpreters into an arbitrary context, here we see it in its correct place
+within the typeclass hierarchy:
+
+#+BEGIN_SRC scala
+@typeclass trait LiftIO[F[_]] {
+  def liftIO[A](ioa: IO[A]): F[A]
+}
+#+END_SRC
+
+***** =Async=
+
+=Async= is primarily for legacy integration and describes callbacks that perform
+a side-effect.
+
+#+BEGIN_SRC scala
+@typeclass trait Async[F[_]] extends Sync[F] with LiftIO[F] {
+  def async[A](k: (Either[Throwable, A] => Unit) => Unit): F[A]
+  ...
+}
+#+END_SRC
+
+The =k= in =.async= is a function that should be called with a callback for
+signaling the result once it is ready.
+
+For example, we might have a GUI that triggers an event =A= when the user moves
+the mouse or presses a key and puts it onto an impure queue. We need to be able
+to turn that event into an =F[A]= that we can treat like any other source of
+data.
+
+#+BEGIN_SRC scala
+val eventQueue = ... // impure queue
+
+F.async { callback =>
+  eventQueue.nextEvent(e => callback(e))
+}
+#+END_SRC
+
+Be careful of thread usage when dealing with legacy APIs that use blocking I/O,
+if the =eventQueue.nextEvent= blocks on a thread then this will too.
+
+***** =Effect=
+
+=Effect= is the opposite of =LiftIO= and means that the effect can be converted
+into the concrete =IO= implementation.
+
+#+BEGIN_SRC scala
+@typeclass trait Effect[F[_]] extends Async[F] {
+  def toIO[A](fa: F[A]): IO[A]
+}
+#+END_SRC
+
+***** =Concurrent=
+
+Contexts that implement =Concurrent= may start /fibers/, a lightweight
+abstraction over a JVM =Thread=.
+
+#+BEGIN_SRC scala
+@typeclass trait Concurrent[F[_]] extends Async[F] {
+  def start[A](fa: F[A]): F[Fiber[F, A]]
+  ...
+}
+#+END_SRC
+
+When we have a =Fiber= we can =.join= back into the =IO=, or =.cancel= the
 underlying work.
 
 #+BEGIN_SRC scala
-trait Fiber[E, A] {
-  def join: IO[E, A]
-  def interrupt[E2](t: Throwable): IO[E2, Unit]
+trait Fiber[F[_], A] {
+  def join: F[A]
+  def cancel: CancelToken[F]
 }
+#+END_SRC
+
+A =CancelToken= is just a type alias to aid with readibility.
+
+#+BEGIN_SRC scala
+type CancelToken[F[_]] = F[Unit]
 #+END_SRC
 
 We can use fibers to achieve a form of optimistic concurrency control. Consider
@@ -8423,141 +8531,92 @@ validation fails, which is performed in parallel.
   final class BadData(data: Data) extends Throwable with NoStackTrace
 
   for {
-    fiber1   <- analysis(data).fork
-    fiber2   <- validate(data).fork
+    fiber1   <- analysis(data).start
+    fiber2   <- validate(data).start
     valid    <- fiber2.join
-    _        <- if (!valid) fiber1.interrupt(BadData(data))
+    _        <- if (!valid) fiber1.cancel
                 else IO.unit
     result   <- fiber1.join
   } yield result
 #+END_SRC
 
-Another usecase for fibers is when we need to perform a /fire and forget/
-action. For example, low priority logging over a network.
-
-**** =Promise=
-
-A promise represents an asynchronous variable that can be set exactly once (with
-=complete= or =error=). An unbounded number of listeners can =get= the variable.
+For the common case where we have two pieces of work and we only care which one
+completes first, we can use =.race=, which will always cancel the one that comes
+second
 
 #+BEGIN_SRC scala
-final class Promise[E, A] private (ref: AtomicReference[State[E, A]]) {
-  def complete[E2](a: A): IO[E2, Boolean] = ...
-  def error[E2](e: E): IO[E2, Boolean] = ...
-  def get: IO[E, A] = ...
-
-  // interrupts all listeners
-  def interrupt[E2](t: Throwable): IO[E2, Boolean] = ...
-}
-object Promise {
-  def make[E, A]: IO[E, Promise[E, A]] = ...
+@typeclass trait Concurrent[F[_]] extends Async[F] {
+  def race[A, B](fa: F[A], fb: F[B]): F[Either[A, B]] = ...
+  ...
 }
 #+END_SRC
 
-=Promise= is not something that we typically use in application code. It is a
-building block for high level concurrency frameworks.
+Finally, =Concurrent= provides more refined control over parallelism than the
+=Parallel= typeclass offering variants of =.parTraverse= (and more) with a
+number that caps the maximum level of parallelism to use:
 
-#+BEGIN_ASIDE
-When an operation is guaranteed to succeed, the error type =E= is left as a free
-type parameter so that the caller can specify their preference.
-#+END_ASIDE
+#+BEGIN_SRC scala
+def parTraverseN[T[_]: Traverse, M[_]: Concurrent, A, B]
+      (n: Long)(ta: T[A])(f: A => M[B]): M[T[B]]
+#+END_SRC
 
-**** =IORef=
+***** =ConcurrentEffect=
 
-=IORef= is the =IO= equivalent of an atomic mutable variable.
+=ConcurrentEffect= is a convenient combination of both =Concurrent= and =Effect=
+that provides most everything that we can want out of =IO=.
+
+#+BEGIN_SRC scala
+@typeclass trait ConcurrentEffect[F[_]] extends Concurrent[F] with Effect[F]
+#+END_SRC
+
+It is considered good practice to prefer typeclasses instead of directly using
+=IO= because it allows for implementations to be replaced. Effect implementation
+is a very active area of research for the community, we would not want to miss
+out on future improvements by limiting ourselves to today's implementation!
+
+**** Concurrency
+
+Cats effect provides several components that are useful for concurrent
+programming that do not fit into the typeclass hierarchy.
+
+***** =Deferred=
+
+=Deferred= is a primitive which represents a value that may not yet be
+available, it is the FP equivalent of a =Promise=.
+
+#+BEGIN_SRC scala
+abstract class Deferred[F[_], A] {
+  def get: F[A]
+  def complete(a: A): F[Unit]
+}
+#+END_SRC
+
+calling =.complete= more than once will give an action that throws an
+=IllegalStateException=.
+
+=Deferred= is not something that we typically use in application code. It is a
+building block for high level concurrency frameworks or for integrating with
+legacy systems.
+
+**** =MVar=
+
+=MVar= is the FP equivalent of an atomic mutable variable.
 
 We can read the variable and we have a variety of ways to write or update it.
 
 #+BEGIN_SRC scala
-final class IORef[A] private (ref: AtomicReference[A]) {
-  def read[E]: IO[E, A] = ...
+abstract class MVar[F[_], A] {
+  def put(a: A): F[Unit]
+  def take: F[A]
+  def read: F[A]
 
-  // write with immediate consistency guarantees
-  def write[E](a: A): IO[E, Unit] = ...
-  // write with eventual consistency guarantees
-  def writeLater[E](a: A): IO[E, Unit] = ...
-  // return true if an immediate write succeeded, false if not (and abort)
-  def tryWrite[E](a: A): IO[E, Boolean] = ...
-
-  // atomic primitives for updating the value
-  def compareAndSet[E](prev: A, next: A): IO[E, Boolean] = ...
-  def modify[E](f: A => A): IO[E, A] = ...
-  def modifyFold[E, B](f: A => (B, A)): IO[E, B] = ...
-}
-object IORef {
-  def apply[E, A](a: A): IO[E, IORef[A]] = ...
+  def tryPut(a: A): F[Boolean]
+  def tryTake: F[Option[A]]
 }
 #+END_SRC
 
-=IORef= is another building block and can be used to provide a high performance
-=MonadState=. For example, create a newtype specialised to =Task=
-
-#+BEGIN_SRC scala
-final class StateTask[A](val io: Task[A]) extends AnyVal
-object StateTask {
-  def create[S](initial: S): Task[MonadState[StateTask, S]] =
-    for {
-      ref <- IORef(initial)
-    } yield
-      new MonadState[StateTask, S] {
-        override def get       = new StateTask(ref.read)
-        override def put(s: S) = new StateTask(ref.write(s))
-        ...
-      }
-}
-#+END_SRC
-
-We can make use of this optimised =MonadState= implementation in a =SafeApp=,
-where our =.program= depends on optimised MTL typeclasses:
-
-#+BEGIN_SRC scala
-object FastState extends SafeApp {
-  def program[F[_]](implicit F: MonadState[F, Int]): F[ExitStatus] = ...
-
-  def run(@unused args: List[String]): IO[Void, ExitStatus] =
-    for {
-      stateMonad <- StateTask.create(10)
-      output     <- program(stateMonad).io
-    } yield output
-}
-#+END_SRC
-
-A more realistic application would take a variety of algebras and typeclasses as
-input.
-
-#+BEGIN_ASIDE
-This optimised =MonadState= is constructed in a way that breaks typeclass
-coherence. Two instances having the same types may be managing different state.
-It would be prudent to isolate the construction of all such instances to the
-application's entrypoint.
-#+END_ASIDE
-
-***** =LiftIO=
-
-The =LiftIO= that we previously studied was simplified to hide the =E=
-parameter. The actual typeclass is
-
-#+BEGIN_SRC scala
-trait LiftIO[M[_], E] {
-  def liftIO[A](io: IO[E, A])(implicit M: Monad[M]): M[A]
-}
-#+END_SRC
-
-with a minor change to the boilerplate on the companion of our algebra,
-accounting for the extra =E=:
-
-#+BEGIN_SRC scala
-trait Lookup[F[_]] {
-  def look: F[Int]
-}
-object Lookup {
-  def liftIO[F[_]: Monad, E](io: Lookup[IO[E, ?]])(implicit M: LiftIO[F, E]) =
-    new Lookup[F] {
-      def look: F[Int] = M.liftIO(io.look)
-    }
-  ...
-}
-#+END_SRC
+=MVar= is another building block and is very useful to provide collections-based
+mocks for database-like algebras.
 
 *** Summary
 
@@ -8568,6 +8627,12 @@ object Lookup {
 5. =Free= data structures let us analyse, optimise and easily test our programs.
 6. =IO= gives us the ability to implement algebras as effects on the world.
 7. =IO= can perform effects in parallel and is a high performance backbone for any application.
+8. Prefer =Effect=,  =Parallel=, and related typeclasses, to using =IO= directly.
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 ** Typeclass Derivation
 

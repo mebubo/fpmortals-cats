@@ -7391,3 +7391,402 @@ In the final section of this chapter we will see how Cats' `IO` is actually
 implemented.
 
 
+## `IO`
+
+`IO` is a free data structure specialised for use as a general effect monad.
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class IO[A] { ... }
+  object IO {
+    private final class Pure         ... extends IO[A]
+    private final class Delay        ... extends IO[A]
+    private final class RaiseError   ... extends IO[A]
+    private final class Suspend      ... extends IO[A]
+    private final class Bind         ... extends IO[A]
+    private final class Map          ... extends IO[A]
+    ...
+  }
+~~~~~~~~
+
+
+### Creating
+
+There are multiple ways to create an `IO` that cover a variety of eager, lazy,
+safe and unsafe code blocks:
+
+{lang="text"}
+~~~~~~~~
+  object IO {
+    // delayed evaluation of side-effecting / non-total code block
+    def apply[A](a: =>A): IO[A] = ...
+    // eager evaluation of an existing value
+    def pure[E, A](a: A): IO[A] = ...
+    // create a failed IO
+    def raiseError[A](error: Throwable): IO[A] = ...
+    // convert a delayed Future into an IO
+    def fromFuture[A](iof: IO[Future[A]])(implicit C: ContextShift[IO]): IO[A] = ...
+    // asynchronously sleeps for a specific period of time
+    def sleep(d: FiniteDuration)(implicit T: Timer[IO]): IO[Unit] = ...
+    ...
+  }
+~~~~~~~~
+
+We would typically create one `ContextShift` and `Timer` to be shared by the
+entire application with
+
+{lang="text"}
+~~~~~~~~
+  import scala.concurrent.ExecutionContext.global
+  
+  implicit val shift: ContextShift[IO] = IO.shift(global)
+  implicit val timer: Timer[IO] = IO.timer(global)
+~~~~~~~~
+
+but specific implementations can be provided during testing to override the
+behaviour or if a custom thread pool is required in production.
+
+The most common constructors, by far, when dealing with legacy code are
+`IO.apply` and `IO.fromFuture`:
+
+{lang="text"}
+~~~~~~~~
+  val fa: IO[Future[String]] = IO { ... impure code here ... }
+  
+  IO.fromFuture(fa): IO[String]
+~~~~~~~~
+
+We cannot pass around raw `Future`, because it eagerly evaluates, so must always
+be constructed inside a safe block.
+
+
+### Running
+
+`IO` is just a data structure, and is interpreted *at the end of the world* by
+extending `IOApp` and implementing `.run`
+
+{lang="text"}
+~~~~~~~~
+  trait IOApp {
+    def run(args: List[String]): IO[ExitCode]
+  
+    final def main(args: Array[String]): Unit = ... calls run ...
+  }
+  
+  sealed abstract class ExitCode
+  object ExitCode {
+    object Success extends ExitCode
+    object Error extends ExitCode
+  }
+~~~~~~~~
+
+If we are integrating with a legacy system and are not in control of the entry
+point of our application, we can also call a variety of `.unsafe*` methods
+depending on our usecase, the most commonly used being:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class IO[A] {
+    def unsafeRunSync(): A = ...
+    def unsafeToFuture(): Future[A] = ...
+    ...
+  }
+~~~~~~~~
+
+
+### Features
+
+`IO` provides a typeclass instance for `MonadError[Throwable, ?]` along with new
+typeclasses that are introduced by `cats-effect`
+
+{width=70%}
+![](images/cats-effect.png)
+
+
+#### `Bracket`
+
+`Bracket` is for safe resource acquisition and release.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Bracket[F[_], E] extends MonadError[F, E] {
+    def bracket[A, B](acquire: F[A])(use: A => F[B])(release: A => F[Unit]): F[B]
+    def guarantee[A](fa: F[A])(finalizer: F[Unit]): F[A] = ...
+    ...
+  }
+~~~~~~~~
+
+`.bracket` is the most powerful part of the interface, allowing us to define how
+we obtain a resource, what we do with it, and anything we need to do to release
+it. The `release` is guaranteed to be called even if the `use` fails, the
+convenience `.guarantee` can be used if we only need a cleanup step without the
+`acquire`.
+
+In addition to success and failure, a calculation can also be canceled and we
+may cleanup differently depending on these three scenarios with `.bracketCase`:
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class ExitCase[+E]
+  object ExitCase {
+    case object Completed extends ExitCase[Nothing]
+    final case class Error[+E](e: E) extends ExitCase[E]
+    case object Canceled extends ExitCase[Nothing]
+    ...
+  }
+  
+  @typeclass trait Bracket[F[_], E] extends MonadError[F, E] {
+    ...
+    def bracketCase[A, B](acquire: F[A])(use: A => F[B])
+          (release: (A, ExitCase[E]) => F[Unit]): F[B]
+  
+    def uncancelable[A](fa: F[A]): F[A]
+  }
+~~~~~~~~
+
+The ability to `.cancel` a calculation is left up to the implementation and is
+not part of the `Bracket` interface.
+
+
+#### `Defer`
+
+`Defer` is the higher kinded equivalent of `Eval.always`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Defer[F[_]] {
+    def defer[A](fa: => F[A]): F[A]
+  }
+~~~~~~~~
+
+and is useful when we want to avoid an expensive calculation until it is
+necessary.
+
+
+#### `Sync`
+
+`Sync` refines the `Bracket` (and `MonadError`) error type to `Throwable` and
+introduces `.suspend`, which is effectively the same as `Defer.defer` but
+explicitly for effects, and `.delay` as the mechanism for side-effecting blocks
+of code. `Sync.delay` is the generalised version of `IO { ... }`
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Sync[F[_]] extends Bracket[F, Throwable] with Defer[F] {
+    def suspend[A](thunk: => F[A]): F[A]
+    def delay[A](thunk: => A): F[A] = ...
+  }
+~~~~~~~~
+
+
+#### `LiftIO`
+
+We have already been introduced to `LiftIO` in the context of lifting `IO`
+interpreters into an arbitrary context, here we see it in its correct place
+within the typeclass hierarchy:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait LiftIO[F[_]] {
+    def liftIO[A](ioa: IO[A]): F[A]
+  }
+~~~~~~~~
+
+
+#### `Async`
+
+`Async` is primarily for legacy integration and describes callbacks that perform
+a side-effect.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Async[F[_]] extends Sync[F] with LiftIO[F] {
+    def async[A](k: (Either[Throwable, A] => Unit) => Unit): F[A]
+    ...
+  }
+~~~~~~~~
+
+The `k` in `.async` is a function that should be called with a callback for
+signaling the result once it is ready.
+
+For example, we might have a GUI that triggers an event `A` when the user moves
+the mouse or presses a key and puts it onto an impure queue. We need to be able
+to turn that event into an `F[A]` that we can treat like any other source of
+data.
+
+{lang="text"}
+~~~~~~~~
+  val eventQueue = ... // impure queue
+  
+  F.async { callback =>
+    eventQueue.nextEvent(e => callback(e))
+  }
+~~~~~~~~
+
+Be careful of thread usage when dealing with legacy APIs that use blocking I/O,
+if the `eventQueue.nextEvent` blocks on a thread then this will too.
+
+
+#### `Effect`
+
+`Effect` is the opposite of `LiftIO` and means that the effect can be converted
+into the concrete `IO` implementation.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Effect[F[_]] extends Async[F] {
+    def toIO[A](fa: F[A]): IO[A]
+  }
+~~~~~~~~
+
+
+#### `Concurrent`
+
+Contexts that implement `Concurrent` may start *fibers*, a lightweight
+abstraction over a JVM `Thread`.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Concurrent[F[_]] extends Async[F] {
+    def start[A](fa: F[A]): F[Fiber[F, A]]
+    ...
+  }
+~~~~~~~~
+
+When we have a `Fiber` we can `.join` back into the `IO`, or `.cancel` the
+underlying work.
+
+{lang="text"}
+~~~~~~~~
+  trait Fiber[F[_], A] {
+    def join: F[A]
+    def cancel: CancelToken[F]
+  }
+~~~~~~~~
+
+A `CancelToken` is just a type alias to aid with readibility.
+
+{lang="text"}
+~~~~~~~~
+  type CancelToken[F[_]] = F[Unit]
+~~~~~~~~
+
+We can use fibers to achieve a form of optimistic concurrency control. Consider
+the case where we have `data` that we need to analyse, but we also need to
+validate it. We can optimistically begin the analysis and cancel the work if the
+validation fails, which is performed in parallel.
+
+{lang="text"}
+~~~~~~~~
+  final class BadData(data: Data) extends Throwable with NoStackTrace
+  
+  for {
+    fiber1   <- analysis(data).start
+    fiber2   <- validate(data).start
+    valid    <- fiber2.join
+    _        <- if (!valid) fiber1.cancel
+                else IO.unit
+    result   <- fiber1.join
+  } yield result
+~~~~~~~~
+
+For the common case where we have two pieces of work and we only care which one
+completes first, we can use `.race`, which will always cancel the one that comes
+second
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Concurrent[F[_]] extends Async[F] {
+    def race[A, B](fa: F[A], fb: F[B]): F[Either[A, B]] = ...
+    ...
+  }
+~~~~~~~~
+
+Finally, `Concurrent` provides more refined control over parallelism than the
+`Parallel` typeclass offering variants of `.parTraverse` (and more) with a
+number that caps the maximum level of parallelism to use:
+
+{lang="text"}
+~~~~~~~~
+  def parTraverseN[T[_]: Traverse, M[_]: Concurrent, A, B]
+        (n: Long)(ta: T[A])(f: A => M[B]): M[T[B]]
+~~~~~~~~
+
+
+#### `ConcurrentEffect`
+
+`ConcurrentEffect` is a convenient combination of both `Concurrent` and `Effect`
+that provides most everything that we can want out of `IO`.
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait ConcurrentEffect[F[_]] extends Concurrent[F] with Effect[F]
+~~~~~~~~
+
+It is considered good practice to prefer typeclasses instead of directly using
+`IO` because it allows for implementations to be replaced. Effect implementation
+is a very active area of research for the community, we would not want to miss
+out on future improvements by limiting ourselves to today's implementation!
+
+
+### Concurrency
+
+Cats effect provides several components that are useful for concurrent
+programming that do not fit into the typeclass hierarchy.
+
+
+#### `Deferred`
+
+`Deferred` is a primitive which represents a value that may not yet be
+available, it is the FP equivalent of a `Promise`.
+
+{lang="text"}
+~~~~~~~~
+  abstract class Deferred[F[_], A] {
+    def get: F[A]
+    def complete(a: A): F[Unit]
+  }
+~~~~~~~~
+
+calling `.complete` more than once will give an action that throws an
+`IllegalStateException`.
+
+`Deferred` is not something that we typically use in application code. It is a
+building block for high level concurrency frameworks or for integrating with
+legacy systems.
+
+
+### `MVar`
+
+`MVar` is the FP equivalent of an atomic mutable variable.
+
+We can read the variable and we have a variety of ways to write or update it.
+
+{lang="text"}
+~~~~~~~~
+  abstract class MVar[F[_], A] {
+    def put(a: A): F[Unit]
+    def take: F[A]
+    def read: F[A]
+  
+    def tryPut(a: A): F[Boolean]
+    def tryTake: F[Option[A]]
+  }
+~~~~~~~~
+
+`MVar` is another building block and is very useful to provide collections-based
+mocks for database-like algebras.
+
+
+## Summary
+
+1.  The `Future` is broke, don't go there.
+2.  Manage stack safety with a `Trampoline`.
+3.  The Monad Transformer Library (MTL) abstracts over common effects with typeclasses.
+4.  Monad Transformers provide default implementations of the MTL.
+5.  `Free` data structures let us analyse, optimise and easily test our programs.
+6.  `IO` gives us the ability to implement algebras as effects on the world.
+7.  `IO` can perform effects in parallel and is a high performance backbone for any application.
+8.  Prefer `Effect`,  `Parallel`, and related typeclasses, to using `IO` directly.
+
+
