@@ -4535,8 +4535,8 @@ parallel functions and then map over their combined output:
 #+BEGIN_SRC scala
 @typeclass trait Apply[F[_]] extends Functor[F] with Semigroupal[F] {
   ...
-  def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
-  def map3[A,B,C,D](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
+  def map2[A,B,Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
+  def map3[A,B,C,Z](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
   ...
   def map22[...]
 #+END_SRC
@@ -7589,7 +7589,7 @@ object Drone {
 #+END_SRC
 
 What we want is for our AST to be a combination of the =Machines= and =Drone=
-ASTs. We studied =EitherK= in Chapter 6, a higher kinded disjunction:
+ASTs. We studied =EitherK= in Chapter 6, a higher kinded =Either=:
 
 #+BEGIN_SRC scala
 final case class EitherK[F[_], G[_], A](run: Either[F[A], G[A]])
@@ -8629,11 +8629,6 @@ mocks for database-like algebras.
 7. =IO= can perform effects in parallel and is a high performance backbone for any application.
 8. Prefer =Effect=,  =Parallel=, and related typeclasses, to using =IO= directly.
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 ** Typeclass Derivation
 
 Typeclasses provide polymorphic functionality to our applications. But to use a
@@ -8649,9 +8644,7 @@ There are four approaches to typeclass derivation:
    of a =case class=. It is useful only for educational purposes and adhoc
    performance optimisations.
 
-2. Abstract over the typeclass by an existing Scalaz typeclass. This is the
-   approach of =scalaz-deriving=, producing automated tests and derivations for
-   products and coproducts
+2. Abstract over the typeclass by an existing Cats typeclass.
 
 3. Macros. However, writing a macro for each typeclass requires an advanced and
    experienced developer. Fortunately, Jon Pretty's [[https://github.com/propensive/magnolia][Magnolia]] library abstracts
@@ -8663,8 +8656,8 @@ There are four approaches to typeclass derivation:
    the type level.
 
 In this chapter we will study increasingly complex typeclasses and their
-derivations. We will begin with =scalaz-deriving= as the most principled
-mechanism, repeating some lessons from Chapter 5 "Scalaz Typeclasses", then
+derivations. We will begin with typeclasses of typeclasses as the most principled
+mechanism, repeating some lessons from Chapter 5 "Cats Typeclasses", then
 Magnolia (the easiest to use), finishing with Shapeless (the most powerful) for
 typeclasses with complex derivation logic.
 
@@ -8676,18 +8669,18 @@ Each example exhibits a feature that can be generalised:
 #+BEGIN_SRC scala
   @typeclass trait Equal[A]  {
     // type parameter is in contravariant (parameter) position
-    @op("===") def equal(a1: A, a2: A): Boolean
+    @op("===") def eqv(a1: A, a2: A): Boolean
   }
 
   // for requesting default values of a type when testing
   @typeclass trait Default[A] {
     // type parameter is in covariant (return) position
-    def default: String \/ A
+    def default: Either[String, A]
   }
 
   @typeclass trait Semigroup[A] {
     // type parameter is in both covariant and contravariant position (invariant)
-    @op("|+|") def append(x: A, y: =>A): A
+    @op("|+|") def combine(x: A, y: A): A
   }
 
   @typeclass trait JsEncoder[T] {
@@ -8697,7 +8690,7 @@ Each example exhibits a feature that can be generalised:
 
   @typeclass trait JsDecoder[T] {
     // type parameter is in covariant position and needs access to field names
-    def fromJson(j: JsValue): String \/ T
+    def fromJson(j: JsValue): Either[String, T]
   }
 #+END_SRC
 
@@ -8716,109 +8709,47 @@ derivation with Magnolia and Shapeless, combined with limitations of the Scala
 compiler's implicit search, commonly leads to typeclass decoherence.
 #+END_ASIDE
 
-*** =scalaz-deriving=
+*** Typeclasses of Typeclasses
 
-The =scalaz-deriving= library is an extension to Scalaz and can be added to a
-project's =build.sbt= with
-
-#+BEGIN_SRC scala
-val derivingVersion = "1.0.0"
-libraryDependencies += "org.scalaz" %% "scalaz-deriving" % derivingVersion
-#+END_SRC
-
-providing new typeclasses, shown below in relation to core Scalaz typeclasses:
-
-#+BEGIN_SRC dot :file images/scalaz-deriving-base.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT];
-    node [fontname=Hack];
-    node [fontcolor=lightgray,color=lightgray];
-    edge [color=lightgray]
-
-    Invariant;
-    InvariantApplicative [fontcolor=black,color=black];
-    InvariantAlt [fontcolor=black,color=black];
-
-    Contravariant;
-    Divisible;
-    Decidable [fontcolor=black,color=black];
-
-    Functor;
-    Applicative;
-    Alt [fontcolor=black,color=black];
-
-    Monad;
-    MonadError;
-
-    Contravariant -> Invariant;
-
-    Divisible -> Contravariant;
-    Decidable -> Divisible [color=black];
-
-    InvariantApplicative -> Invariant [color=black];
-
-    Functor -> Invariant;
-    Applicative -> Functor;
-    Alt -> Applicative [color=black];
-
-    Monad -> Applicative;
-    MonadError -> Monad;
-
-    Decidable -> InvariantAlt [color=black];
-    Alt -> InvariantAlt [color=black];
-
-    InvariantAlt -> InvariantApplicative [color=black];
-    Divisible -> InvariantApplicative [style=dotted];
-    Applicative -> InvariantApplicative [style=dotted];
-}
-#+END_SRC
-
-#+CAPTION: 60
-#+RESULTS:
-[[file:images/scalaz-deriving-base.png]]
-
-#+BEGIN_ASIDE
-In Scalaz 7.3, =Applicative= and =Divisible= will inherit from =InvariantApplicative=
-#+END_ASIDE
-
-Before we proceed, here is a quick recap of the core Scalaz typeclasses:
+Before we proceed, here is a quick recap of the core Cats typeclasses, focussed
+on just the typeclasses that are relevant for this chapter:
 
 #+BEGIN_SRC scala
 @typeclass trait Invariant[F[_]] {
-  def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B]
+  def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B]
 }
 
 @typeclass trait Contravariant[F[_]] extends Invariant[F] {
   def contramap[A, B](fa: F[A])(f: B => A): F[B]
-  def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = contramap(fa)(g)
 }
 
-@typeclass trait Divisible[F[_]] extends Contravariant[F] {
-  def conquer[A]: F[A]
-  def divide2[A, B, C](fa: F[A], fb: F[B])(f: C => (A, B)): F[C]
+@typeclass trait ContravariantMonoidal[F[_]] extends Contravariant[F] {
+  def trivial[A]: F[A] = contramap(unit)(_ => ())
+
+  def contramap2[A, B, Z](f0: F[A], f1: F[B])(f: Z => (A, B)): F[Z]
+  def contramap3[A, B, C, Z](f0: F[A], f1: F[B], f2: F[C])(f: Z => (A, B, C)): F[Z]
   ...
-  def divide22[...] = ...
+  def contramap22[...] = ...
 }
 
 @typeclass trait Functor[F[_]] extends Invariant[F] {
   def map[A, B](fa: F[A])(f: A => B): F[B]
-  def xmap[A, B](fa: F[A], f: A => B, g: B => A): F[B] = map(fa)(f)
 }
 
-@typeclass trait Applicative[F[_]] extends Functor[F] {
-  def point[A](a: =>A): F[A]
-  def map2[A,B,C](fa: =>F[A], fb: =>F[B])(f: (A, B) => C): F[C] = ...
+@typeclass trait Apply[F[_]] extends Functor[F] {
+  def map2[A,B,Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
+  def map3[A,B,C,Z](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
   ...
-  def apply12[...]
+  def map22[...]
 }
 
-@typeclass trait Monad[F[_]] extends Functor[F] {
-  @op(">>=") def bind[A, B](fa: F[A])(f: A => F[B]): F[B]
+@typeclass trait Monad[F[_]] extends Apply[F] {
+  def flatMap[A, B](fa: F[A])(f: A => F[B]): F[B]
 }
+
 @typeclass trait MonadError[F[_], E] extends Monad[F] {
   def raiseError[A](e: E): F[A]
-  def emap[A, B](fa: F[A])(f: A => E \/ B): F[B] = ...
-  ...
+  def fromEither[A](x: Either[E, A]): F[A] = ...
 }
 #+END_SRC
 
@@ -8826,27 +8757,27 @@ Before we proceed, here is a quick recap of the core Scalaz typeclasses:
 
 The simplest way to derive a typeclass is to reuse one that already exists.
 
-The =Equal= typeclass has an instance of =Contravariant[Equal]=, providing
+The =Eq= typeclass has an instance of =Contravariant[Eq]=, providing
 =.contramap=:
 
 #+BEGIN_SRC scala
-object Equal {
-  implicit val contravariant = new Contravariant[Equal] {
-    def contramap[A, B](fa: Equal[A])(f: B => A): Equal[B] =
-      (b1, b2) => fa.equal(f(b1), f(b2))
+object Eq {
+  implicit val contravariant = new Contravariant[Eq] {
+    def contramap[A, B](fa: Eq[A])(f: B => A): Eq[B] =
+      (b1, b2) => fa.eqv(f(b1), f(b2))
   }
   ...
 }
 #+END_SRC
 
-As users of =Equal=, we can use =.contramap= for our single parameter data
+As users of =Eq=, we can use =.contramap= for our single parameter data
 types. Recall that typeclass instances go on the data type companions to be in
 their implicit scope:
 
 #+BEGIN_SRC scala
 final case class Foo(s: String)
 object Foo {
-  implicit val equal: Equal[Foo] = Equal[String].contramap(_.s)
+  implicit val equal: Eq[Foo] = Eq[String].contramap(_.s)
 }
 
 scala> Foo("hello") === Foo("world")
@@ -8859,8 +8790,8 @@ particular, typeclasses with type parameters in covariant position may have a
 
 #+BEGIN_SRC scala
 object Default {
-  def instance[A](d: =>String \/ A) = new Default[A] { def default = d }
-  implicit val string: Default[String] = instance("".right)
+  def instance[A](d: => Either[String, A]) = new Default[A] { def default = d }
+  implicit val string: Default[String] = instance(Right(""))
 
   implicit val functor: Functor[Default] = new Functor[Default] {
     def map[A, B](fa: Default[A])(f: A => B): Default[B] = instance(fa.default.map(f))
@@ -8884,50 +8815,33 @@ is the case with =Semigroup=, it may provide an =Invariant=
 #+BEGIN_SRC scala
 object Semigroup {
   implicit val invariant = new Invariant[Semigroup] {
-    def xmap[A, B](ma: Semigroup[A], f: A => B, g: B => A) = new Semigroup[B] {
-      def append(x: B, y: =>B): B = f(ma.append(g(x), g(y)))
+    def imap[A, B](ma: Semigroup[A], f: A => B, g: B => A) = new Semigroup[B] {
+      def combine(x: B, y: B): B = f(ma.combine(g(x), g(y)))
     }
   }
   ...
 }
 #+END_SRC
 
-and we can call =.xmap=
+and we can call =.imap=
 
 #+BEGIN_SRC scala
 object Foo {
-  implicit val semigroup: Semigroup[Foo] = Semigroup[String].xmap(Foo(_), _.s)
+  implicit val semigroup: Semigroup[Foo] = Semigroup[String].imap(Foo(_), _.s)
   ...
 }
 #+END_SRC
 
-Generally, it is simpler to just use =.xmap= instead of =.map= or =.contramap=:
+Generally, it is simpler to just use =.imap= instead of =.map= or =.contramap=:
 
 #+BEGIN_SRC scala
 final case class Foo(s: String)
 object Foo {
-  implicit val equal: Equal[Foo]         = Equal[String].xmap(Foo(_), _.s)
-  implicit val default: Default[Foo]     = Default[String].xmap(Foo(_), _.s)
-  implicit val semigroup: Semigroup[Foo] = Semigroup[String].xmap(Foo(_), _.s)
+  implicit val equal: Eq[Foo]            = Eq[String].imap(Foo(_), _.s)
+  implicit val default: Default[Foo]     = Default[String].imap(Foo(_), _.s)
+  implicit val semigroup: Semigroup[Foo] = Semigroup[String].imap(Foo(_), _.s)
 }
 #+END_SRC
-
-#+BEGIN_ASIDE
-The =@xderiving= annotation automatically inserts =.xmap= boilerplate. Add the
-following to =build.sbt=
-
-#+BEGIN_SRC scala
-addCompilerPlugin("org.scalaz" %% "deriving-plugin" % derivingVersion)
-libraryDependencies += "org.scalaz" %% "deriving-macro" % derivingVersion % "provided"
-#+END_SRC
-
-and use it as
-
-#+BEGIN_SRC scala
-@xderiving(Equal, Default, Semigroup)
-final case class Foo(s: String)
-#+END_SRC
-#+END_ASIDE
 
 **** =MonadError=
 
@@ -8936,6 +8850,8 @@ and things that /read/ into a polymorphic value have a =Functor=. However, it is
 very much expected that reading can fail. For example, if we have a default
 =String= it does not mean that we can simply derive a default =String Refined
 NonEmpty= from it
+
+We start by introducing a convenience function that we will use a lot
 
 #+BEGIN_SRC scala
 import eu.timepit.refined.refineV
@@ -8964,22 +8880,31 @@ provide a =MonadError[Default, String]=:
 
 #+BEGIN_SRC scala
   implicit val monad = new MonadError[Default, String] {
-    def point[A](a: =>A): Default[A] =
-      instance(a.right)
-    def bind[A, B](fa: Default[A])(f: A => Default[B]): Default[B] =
-      instance((fa >>= f).default)
-    def handleError[A](fa: Default[A])(f: String => Default[A]): Default[A] =
-      instance(fa.default.handleError(e => f(e).default))
+    def pure[A](a: A): Default[A] = instance(Right(a))
+    def flatMap[A, B](fa: Default[A])(f: A => Default[B]): Default[B] =
+      instance((fa.flatMap(f)).default)
+    def handleErrorWith[A](fa: Default[A])(f: String => Default[A]): Default[A] =
+      instance(fa.default.handleErrorWith(e => f(e).default))
     def raiseError[A](e: String): Default[A] =
-      instance(e.left)
+      instance(Left(e))
+    ...
   }
 #+END_SRC
 
-Now we have access to =.emap= syntax and can derive our refined type
+If we introduce the general purpose helper function =.emap=
+
+#+BEGIN_SRC scala
+  implicit class MonadErrorOps[F[_]: MonadError, E](fa: F[A]) {
+    def emap[B](f: A => Either[E, B]): F[B] =
+      fa.flatMap(a => fromEither(f(a)))
+  }
+#+END_SRC
+
+we have access to =.emap= syntax and can derive our refined type
 
 #+BEGIN_SRC scala
   implicit val nes: Default[String Refined NonEmpty] =
-    Default[String].emap(refineV[NonEmpty](_).disjunction)
+    Default[String].emap(refineV[NonEmpty](_))
 #+END_SRC
 
 In fact, we can provide a derivation rule for all refined types
@@ -8987,33 +8912,30 @@ In fact, we can provide a derivation rule for all refined types
 #+BEGIN_SRC scala
   implicit def refined[A: Default, P](
     implicit V: Validate[A, P]
-  ): Default[A Refined P] = Default[A].emap(refineV[P](_).disjunction)
+  ): Default[A Refined P] = Default[A].emap(refineV[P](_))
 #+END_SRC
 
 where =Validate= is from the refined library and is required by =refineV=.
 
 #+BEGIN_ASIDE
-The =refined-scalaz= extension to =refined= provides support for automatically
+The =refined-cats= extension to =refined= provides support for automatically
 deriving all typeclasses for refined types with the following import
 
 #+BEGIN_SRC scala
-import eu.timepit.refined.scalaz._
+import eu.timepit.refined.cats._
 #+END_SRC
 
 if there is a =Contravariant= or =MonadError[?, String]= in the implicit scope.
-
-However, due to [[https://github.com/scala/bug/issues/10753][limitations of the Scala compiler]] it rarely works in practice
-and we must write =implicit def refined= derivations for each typeclass.
 #+END_ASIDE
 
 Similarly we can use =.emap= to derive an =Int= decoder from a =Long=, with
 protection around the non-total =.toInt= stdlib method.
 
 #+BEGIN_SRC scala
-  implicit val long: Default[Long] = instance(0L.right)
+  implicit val long: Default[Long] = instance(Right(0L))
   implicit val int: Default[Int] = Default[Long].emap {
-    case n if (Int.MinValue <= n && n <= Int.MaxValue) => n.toInt.right
-    case big => s"$big does not fit into 32 bits".left
+    case n if (Int.MinValue <= n && n <= Int.MaxValue) => Right(n.toInt)
+    case big => Left(s"$big does not fit into 32 bits")
   }
 #+END_SRC
 
@@ -9028,115 +8950,41 @@ design so that it can never fail, e.g. with the following type signature
 
 We would not be able to define a =MonadError=, forcing us to provide instances
 that always succeed. This will result in more boilerplate but gains compiletime
-safety. However, we will continue with =String \/ A= as the return type as it is
-a more general example.
+safety. However, we will continue with =Either[String, A]= as the return type as
+it is a more general example.
 
-**** =.fromIso=
+**** =ContravariantMonoidal= and =Applicative=
 
-All of the typeclasses in Scalaz have a method on their companion with a
-signature similar to the following:
-
-#+BEGIN_SRC scala
-object Equal {
-  def fromIso[F, G: Equal](D: F <=> G): Equal[F] = ...
-  ...
-}
-
-object Monad {
-  def fromIso[F[_], G[_]: Monad](D: F <~> G): Monad[F] = ...
-  ...
-}
-#+END_SRC
-
-These mean that if we have a type =F=, and a way to convert it into a =G= that
-has an instance, we can call =Equal.fromIso= to obtain an instance for =F=.
-
-For example, as typeclass users, if we have a data type =Bar= we can define an
-isomorphism to =(String, Int)=
-
-#+BEGIN_SRC scala
-import Isomorphism._
-
-final case class Bar(s: String, i: Int)
-object Bar {
-  val iso: Bar <=> (String, Int) = IsoSet(b => (b.s, b.i), t => Bar(t._1, t._2))
-}
-#+END_SRC
-
-and then derive =Equal[Bar]= because there is already an =Equal= for all tuples:
-
-#+BEGIN_SRC scala
-object Bar {
-  ...
-  implicit val equal: Equal[Bar] = Equal.fromIso(iso)
-}
-#+END_SRC
-
-The =.fromIso= mechanism can also assist us as typeclass authors. Consider
-=Default= which has a core type signature of the form ~Unit => F[A]~. Our
-=default= method is in fact isomorphic to =Kleisli[F, Unit, A]=, the =ReaderT=
-monad transformer.
-
-Since =Kleisli= already provides a =MonadError= (if =F= has one), we can derive
-=MonadError[Default, String]= by creating an isomorphism between =Default= and
-=Kleisli=:
-
-#+BEGIN_SRC scala
-  private type Sig[a] = Unit => String \/ a
-  private val iso = Kleisli.iso(
-    λ[Sig ~> Default](s => instance(s(()))),
-    λ[Default ~> Sig](d => _ => d.default)
-  )
-  implicit val monad: MonadError[Default, String] = MonadError.fromIso(iso)
-#+END_SRC
-
-giving us the =.map=, =.xmap= and =.emap= that we've been making use of so far,
-effectively for free.
-
-**** =Divisible= and =Applicative=
-
-To derive the =Equal= for our case class with two parameters, we reused the
-instance that Scalaz provides for tuples. But where did the tuple instance come
+To derive the =Eq= for our case class with two parameters, we reused the
+instance that Cats provides for tuples. But where did the tuple instance come
 from?
 
-A more specific typeclass than =Contravariant= is =Divisible=. =Equal= has an
-instance:
+A more specific typeclass than =Contravariant= is =ContravariantMonoidal=. =Eq=
+has an instance:
 
 #+BEGIN_SRC scala
-  implicit val divisible = new Divisible[Equal] {
+  implicit val contramonoidal = new ContravariantMonoidal[Eq] {
     ...
-    def divide[A1, A2, Z](a1: =>Equal[A1], a2: =>Equal[A2])(
+    def contramap2[A1, A2, Z](a1: Eq[A1], a2: Eq[A2])(
       f: Z => (A1, A2)
-    ): Equal[Z] = { (z1, z2) =>
+    ): Eq[Z] = { (z1, z2) =>
       val (s1, s2) = f(z1)
       val (t1, t2) = f(z2)
-      a1.equal(s1, t1) && a2.equal(s2, t2)
+      a1.eqv(s1, t1) && a2.eqv(s2, t2)
     }
-    def conquer[A]: Equal[A] = (_, _) => true
+    def trivial[A]: Eq[A] = (_, _) => true
   }
 #+END_SRC
 
-#+BEGIN_ASIDE
-When implementing =Divisible= the compiler will require us to provide
-=.contramap=, which we can do directly with an optimised implementation or with
-this derived combinator:
-
-#+BEGIN_SRC scala
-  override def contramap[A, B](fa: F[A])(f: B => A): F[B] =
-    divide2(conquer[Unit], fa)(c => ((), f(c)))
-#+END_SRC
-
-This has been added to =Divisible= in Scalaz 7.3.
-#+END_ASIDE
-
-And from =divide2=, =Divisible= is able to build up derivations all the way to
-=divide22=. We can call these methods directly for our data types:
+And from =contramap2=, =ContravariantMonoidal= is able to build up derivations
+all the way to =contramap22= (and the =.contramapN= helper for tuples). We can
+call these methods directly for our data types:
 
 #+BEGIN_SRC scala
 final case class Bar(s: String, i: Int)
 object Bar {
-  implicit val equal: Equal[Bar] =
-    Divisible[Equal].divide2(Equal[String], Equal[Int])(b => (b.s, b.i))
+  implicit val equal: Eq[Bar] =
+    (Eq[String], Eq[Int]).contramapN(b => (b.s, b.i))
 }
 #+END_SRC
 
@@ -9146,34 +8994,34 @@ The equivalent for type parameters in covariant position is =Applicative=:
 object Bar {
   ...
   implicit val default: Default[Bar] =
-    Applicative[Default].map2(Default[String], Default[Int])(Bar(_, _))
+    (Default[String], Default[Int]).mapN(Bar(_, _))
 }
 #+END_SRC
 
 But we must be careful that we do not break the typeclass laws when we implement
-=Divisible= or =Applicative=. In particular, it is easy to break the /law of
-composition/ which says that the following two codepaths must yield exactly the
-same output
+=ContravariantMonoidal= or =Applicative=. In particular, it is easy to break the
+/law of composition/ which says that the following two codepaths must yield
+exactly the same output
 
-- =divide2(divide2(a1, a2)(dupe), a3)(dupe)=
-- =divide2(a1, divide2(a2, a3)(dupe))(dupe)=
+- =contramap2(contramap2(a1, a2)(dupe), a3)(dupe)=
+- =contramap2(a1, contramap2(a2, a3)(dupe))(dupe)=
 - for any ~dupe: A => (A, A)~
 
 with similar laws for =Applicative=.
 
-Consider =JsEncoder= and a proposed instance of =Divisible=
+Consider =JsEncoder= and a proposed instance of =ContravariantMonoidal=
 
 #+BEGIN_SRC scala
-    new Divisible[JsEncoder] {
+    new ContravariantMonoidal[JsEncoder] {
       ...
-      def divide[A, B, C](fa: JsEncoder[A], fb: JsEncoder[B])(
+      def contramap2[A, B, C](fa: JsEncoder[A], fb: JsEncoder[B])(
         f: C => (A, B)
       ): JsEncoder[C] = { c =>
         val (a, b) = f(c)
-        JsArray(IList(fa.toJson(a), fb.toJson(b)))
+        JsArray(List(fa.toJson(a), fb.toJson(b)))
       }
 
-      def conquer[A]: JsEncoder[A] = _ => JsNull
+      def trivial[A]: JsEncoder[A] = _ => JsNull
     }
 #+END_SRC
 
@@ -9189,585 +9037,37 @@ and on the other
 JsArray([JsString(hello),JsArray([JsString(hello),JsString(hello)])])
 #+END_SRC
 
-which are different. We could experiment with variations of the =divide=
+which are different. We could experiment with variations of the =.contramap2=
 implementation, but it will never satisfy the laws for all inputs.
 
-We therefore cannot provide a =Divisible[JsEncoder]= because it would break the
-mathematical laws and invalidates all the assumptions that users of =Divisible=
-rely upon.
+We therefore cannot provide a =ContravariantMonoidal[JsEncoder]= because it
+would break the mathematical laws and invalidates all the assumptions that users
+of =ContravariantMonoidal= rely upon.
 
-To aid in testing laws, Scalaz typeclasses contain the codified versions of
-their laws on the typeclass itself. We can write an automated test, asserting
-that the law fails, to remind us of this fact:
-
-#+BEGIN_SRC scala
-    val D: Divisible[JsEncoder] = ...
-    val S: JsEncoder[String] = JsEncoder[String]
-    val E: Equal[JsEncoder[String]] = (p1, p2) => p1.toJson("hello") === p2.toJson("hello")
-    assert(!D.divideLaw.composition(S, S, S)(E))
-#+END_SRC
-
-On the other hand, a similar =JsDecoder= test meets the =Applicative= composition laws
-
-#+BEGIN_SRC scala
-  final case class Comp(a: String, b: Int)
-  object Comp {
-    implicit val equal: Equal[Comp] = ...
-    implicit val decoder: JsDecoder[Comp] = ...
-  }
-
-  def composeTest(j: JsValue) = {
-    val A: Applicative[JsDecoder] = Applicative[JsDecoder]
-    val fa: JsDecoder[Comp] = JsDecoder[Comp]
-    val fab: JsDecoder[Comp => (String, Int)] = A.point(c => (c.a, c.b))
-    val fbc: JsDecoder[((String, Int)) => (Int, String)] = A.point(_.swap)
-    val E: Equal[JsDecoder[(Int, String)]] = (p1, p2) => p1.fromJson(j) === p2.fromJson(j)
-    assert(A.applyLaw.composition(fbc, fab, fa)(E))
-  }
-#+END_SRC
-
-for some test data
-
-#+BEGIN_SRC scala
-    composeTest(JsObject(IList("a" -> JsString("hello"), "b" -> JsInteger(1))))
-    composeTest(JsNull)
-    composeTest(JsObject(IList("a" -> JsString("hello"))))
-    composeTest(JsObject(IList("b" -> JsInteger(1))))
-#+END_SRC
-
-Now we are reasonably confident that our derived =MonadError= is lawful.
-
-However, just because we have a test that passes for a small set of data does
-not prove that the laws are satisfied. We must also reason through the
-implementation to convince ourselves that it *should* satisfy the laws, and try
-to propose corner cases where it could fail.
+On the other hand, a similar =JsDecoder= test meets the =Applicative=
+composition laws so we can be reasonably confident that our =MonadError= is
+lawful.
 
 One way of generating a wide variety of test data is to use the [[https://github.com/rickynils/scalacheck][scalacheck]]
 library, which provides an =Arbitrary= typeclass that integrates with most
 testing frameworks to repeat a test with randomly generated data.
 
-The =jsonformat= library provides an =Arbitrary[JsValue]= (everybody should
-provide an =Arbitrary= for their ADTs!) allowing us to make use of Scalatest's
-=forAll= feature:
+The =jsonformat= ADT can provide an =Arbitrary[JsValue]= allowing us to make use
+of Scalatest's =.forAll= feature:
 
 #+BEGIN_SRC scala
 forAll(SizeRange(10))((j: JsValue) => composeTest(j))
 #+END_SRC
 
 This test gives us even more confidence that our typeclass meets the
-=Applicative= composition laws. By checking all the laws on =Divisible= and
-=MonadError= we also get *a lot* of smoke tests for free.
+=Applicative= composition laws. By checking all the laws on
+=ContravariantMonoidal= and =MonadError= we also get *a lot* of smoke tests for
+free.
 
 #+BEGIN_ASIDE
 We must restrict =forAll= to have a =SizeRange= of =10=, which limits both
 =JsObject= and =JsArray= to a maximum size of 10 elements. This avoids stack
 overflows as larger numbers can generate gigantic JSON documents.
-#+END_ASIDE
-
-**** =Decidable= and =Alt=
-
-Where =Divisible= and =Applicative= give us typeclass derivation for products
-(built from tuples), =Decidable= and =Alt= give us the coproducts (built from
-nested disjunctions):
-
-#+BEGIN_SRC scala
-@typeclass trait Alt[F[_]] extends Applicative[F] with InvariantAlt[F] {
-  def alt[A](a1: =>F[A], a2: =>F[A]): F[A]
-
-  def altly1[Z, A1](a1: =>F[A1])(f: A1 => Z): F[Z] = ...
-  def altly2[Z, A1, A2](a1: =>F[A1], a2: =>F[A2])(f: A1 \/ A2 => Z): F[Z] = ...
-  def altly3 ...
-  def altly4 ...
-  ...
-}
-
-@typeclass trait Decidable[F[_]] extends Divisible[F] with InvariantAlt[F] {
-  def choose1[Z, A1](a1: =>F[A1])(f: Z => A1): F[Z] = ...
-  def choose2[Z, A1, A2](a1: =>F[A1], a2: =>F[A2])(f: Z => A1 \/ A2): F[Z] = ...
-  def choose3 ...
-  def choose4 ...
-  ...
-}
-#+END_SRC
-
-The four core typeclasses have symmetric signatures:
-
-| Typeclass     | method    | given          | signature         | returns |
-|---------------+-----------+----------------+-------------------+---------|
-| ~Applicative~ | ~map2~    | ~F[A1], F[A2]~ | ~(A1, A2) => Z~   | ~F[Z]~  |
-| ~Alt~         | ~altly2~  | ~F[A1], F[A2]~ | ~(A1 \/ A2) => Z~ | ~F[Z]~  |
-| ~Divisible~   | ~divide2~ | ~F[A1], F[A2]~ | ~Z => (A1, A2)~   | ~F[Z]~  |
-| ~Decidable~   | ~choose2~ | ~F[A1], F[A2]~ | ~Z => (A1 \/ A2)~ | ~F[Z]~  |
-
-supporting covariant products; covariant coproducts; contravariant products;
-contravariant coproducts.
-
-We can write a =Decidable[Equal]=, letting us derive =Equal= for any ADT!
-
-#+BEGIN_SRC scala
-  implicit val decidable = new Decidable[Equal] {
-    ...
-    def choose2[Z, A1, A2](a1: =>Equal[A1], a2: =>Equal[A2])(
-      f: Z => A1 \/ A2
-    ): Equal[Z] = { (z1, z2) =>
-      (f(z1), f(z2)) match {
-        case (-\/(s), -\/(t)) => a1.equal(s, t)
-        case (\/-(s), \/-(t)) => a2.equal(s, t)
-        case _ => false
-      }
-    }
-  }
-#+END_SRC
-
-For an ADT
-
-#+BEGIN_SRC scala
-sealed abstract class Darth { def widen: Darth = this }
-final case class Vader(s: String, i: Int)  extends Darth
-final case class JarJar(i: Int, s: String) extends Darth
-#+END_SRC
-
-where the products (=Vader= and =JarJar=) have an =Equal=
-
-#+BEGIN_SRC scala
-object Vader {
-  private val g: Vader => (String, Int) = d => (d.s, d.i)
-  implicit val equal: Equal[Vader] = Divisible[Equal].divide2(Equal[String], Equal[Int])(g)
-}
-object JarJar {
-  private val g: JarJar => (Int, String) = d => (d.i, d.s)
-  implicit val equal: Equal[JarJar] = Divisible[Equal].divide2(Equal[Int], Equal[String])(g)
-}
-#+END_SRC
-
-we can derive the equal for the whole ADT
-
-#+BEGIN_SRC scala
-object Darth {
-  private def g(t: Darth): Vader \/ JarJar = t match {
-    case p @ Vader(_, _)  => -\/(p)
-    case p @ JarJar(_, _) => \/-(p)
-  }
-  implicit val equal: Equal[Darth] = Decidable[Equal].choose2(Equal[Vader], Equal[JarJar])(g)
-}
-
-scala> Vader("hello", 1).widen === JarJar(1, "hello).widen
-false
-#+END_SRC
-
-#+BEGIN_ASIDE
-Scalaz 7.2 does not provide a =Decidable[Equal]= out of the box, because it was
-a late addition.
-#+END_ASIDE
-
-Typeclasses that have an =Applicative= can be eligible for an =Alt=. If we want
-to use our =Kleisli.iso= trick, we have to extend =IsomorphismMonadError= and
-mix in =Alt=. Upgrade our =MonadError[Default, String]= to have an
-=Alt[Default]=:
-
-#+BEGIN_SRC scala
-private type K[a] = Kleisli[String \/ ?, Unit, a]
-implicit val monad = new IsomorphismMonadError[Default, K, String] with Alt[Default] {
-  override val G = MonadError[K, String]
-  override val iso = ...
-
-  def alt[A](a1: =>Default[A], a2: =>Default[A]): Default[A] = instance(a1.default)
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-The primitive of =Alt= is =alt=, much as the primitive of =Applicative= is =ap=,
-but it often makes more sense to use =altly2= and =map2= as the primitives
-with the following overrides:
-
-#+BEGIN_SRC scala
-  override def ap[A, B](fa: =>F[A])(f: =>F[A => B]): F[B] =
-    map2(fa, f)((a, abc) => abc(a))
-
-  override def alt[A](a1: =>F[A], a2: =>F[A]): F[A] = altly2(a1, a2) {
-    case -\/(a) => a
-    case \/-(a) => a
-  }
-#+END_SRC
-
-Just don't forget to implement =apply2= and =altly2= or there will be an
-infinite loop at runtime.
-#+END_ASIDE
-
-Letting us derive our =Default[Darth]=
-
-#+BEGIN_SRC scala
-object Darth {
-  ...
-  private def f(e: Vader \/ JarJar): Darth = e.merge
-  implicit val default: Default[Darth] =
-    Alt[Default].altly2(Default[Vader], Default[JarJar])(f)
-}
-object Vader {
-  ...
-  private val f: (String, Int) => Vader = Vader(_, _)
-  implicit val default: Default[Vader] =
-    Alt[Default].apply2(Default[String], Default[Int])(f)
-}
-object JarJar {
-  ...
-  private val f: (Int, String) => JarJar = JarJar(_, _)
-  implicit val default: Default[JarJar] =
-    Alt[Default].apply2(Default[Int], Default[String])(f)
-}
-
-scala> Default[Darth].default
-\/-(Vader())
-#+END_SRC
-
-Returning to the =scalaz-deriving= typeclasses, the invariant parents of =Alt=
-and =Decidable= are:
-
-#+BEGIN_SRC scala
-@typeclass trait InvariantApplicative[F[_]] extends Invariant[F] {
-  def xproduct0[Z](f: =>Z): F[Z]
-  def xproduct1[Z, A1](a1: =>F[A1])(f: A1 => Z, g: Z => A1): F[Z] = ...
-  def xproduct2 ...
-  def xproduct3 ...
-  def xproduct4 ...
-}
-
-@typeclass trait InvariantAlt[F[_]] extends InvariantApplicative[F] {
-  def xcoproduct1[Z, A1](a1: =>F[A1])(f: A1 => Z, g: Z => A1): F[Z] = ...
-  def xcoproduct2 ...
-  def xcoproduct3 ...
-  def xcoproduct4 ...
-}
-#+END_SRC
-
-supporting typeclasses with an =Invariant= like =Monoid= and =Semigroup=.
-
-**** Arbitrary Arity and =@deriving=
-
-There are two problems with =InvariantApplicative= and =InvariantAlt=:
-
-1. they only support products of four fields and coproducts of four entries.
-2. there is a *lot* of boilerplate on the data type companions.
-
-In this section we solve both problems with additional typeclasses introduced by
-=scalaz-deriving=
-
-#+BEGIN_SRC dot :file images/scalaz-deriving.png :exports results
-digraph G {
-    graph [dpi=300, rankdir=BT];
-    node [fontname=Hack];
-    node [fontcolor=lightgray,color=lightgray];
-    edge [color=lightgray]
-
-    DerivingProducts [fontcolor=black,color=black];
-    Deriving [fontcolor=black,color=black];
-
-    Deriving -> DerivingProducts [color=black];
-
-    Divisible;
-    Divisiblez [fontcolor=black,color=black];
-
-    Divisiblez -> Divisible [color=black];
-    Divisiblez -> DerivingProducts [color=black];
-
-    Decidable;
-    Decidablez [fontcolor=black,color=black];
-
-    Decidablez -> Decidable [color=black];
-    Decidablez -> Deriving [color=black];
-    Decidablez -> Divisiblez [color=black];
-
-    Applicative;
-    Applicativez [fontcolor=black,color=black];
-
-    Applicativez -> DerivingProducts [color=black];
-    Applicativez -> Applicative [color=black];
-
-    Alt;
-    Altz [fontcolor=black,color=black];
-    Altz -> Alt [color=black];
-    Altz -> Deriving [color=black];
-    Altz -> Applicativez [color=black];
-
-    Decidable -> Divisible;
-    Alt -> Applicative;
-}
-#+END_SRC
-
-#+CAPTION: 75
-#+RESULTS:
-[[file:images/scalaz-deriving.png]]
-
-Effectively, our four central typeclasses =Applicative=, =Divisible=, =Alt= and
-=Decidable= all get extended to arbitrary arity using the [[https://github.com/frees-io/iota][iotaz]] library, hence
-the =z= postfix.
-
-The iotaz library has three main types:
-
-- =TList= which describes arbitrary length chains of types
-- =Prod[A <: TList]= for products
-- =Cop[A <: TList]= for coproducts
-
-By way of example, a =TList= representation of =Darth= from the previous
-section is
-
-#+BEGIN_SRC scala
-import iotaz._, TList._
-
-type DarthT  = Vader  :: JarJar :: TNil
-type VaderT  = String :: Int    :: TNil
-type JarJarT = Int    :: String :: TNil
-#+END_SRC
-
-which can be instantiated:
-
-#+BEGIN_SRC scala
-  val vader: Prod[VaderT]    = Prod("hello", 1)
-  val jarjar: Prod[JarJarT]  = Prod(1, "hello")
-
-  val VaderI = Cop.Inject[Vader, Cop[DarthT]]
-  val darth: Cop[DarthT] = VaderI.inj(Vader("hello", 1))
-#+END_SRC
-
-To be able to use the =scalaz-deriving= API, we need an =Isomorphism= between
-our ADTs and the =iotaz= generic representation. It is a lot of boilerplate,
-we will get to that in a moment:
-
-#+BEGIN_SRC scala
-object Darth {
-  private type Repr   = Vader :: JarJar :: TNil
-  private val VaderI  = Cop.Inject[Vader, Cop[Repr]]
-  private val JarJarI = Cop.Inject[JarJar, Cop[Repr]]
-  private val iso     = IsoSet(
-    {
-      case d: Vader  => VaderI.inj(d)
-      case d: JarJar => JarJarI.inj(d)
-    }, {
-      case VaderI(d)  => d
-      case JarJarI(d) => d
-    }
-  )
-  ...
-}
-
-object Vader {
-  private type Repr = String :: Int :: TNil
-  private val iso   = IsoSet(
-    d => Prod(d.s, d.i),
-    p => Vader(p.head, p.tail.head)
-  )
-  ...
-}
-
-object JarJar {
-  private type Repr = Int :: String :: TNil
-  private val iso   = IsoSet(
-    d => Prod(d.i, d.s),
-    p => JarJar(p.head, p.tail.head)
-  )
-  ...
-}
-#+END_SRC
-
-With that out of the way we can call the =Deriving= API for =Equal=, possible
-because =scalaz-deriving= provides an optimised instance of =Deriving[Equal]=
-
-#+BEGIN_SRC scala
-object Darth {
-  ...
-  implicit val equal: Equal[Darth] = Deriving[Equal].xcoproductz(
-    Prod(Need(Equal[Vader]), Need(Equal[JarJar])))(iso.to, iso.from)
-}
-object Vader {
-  ...
-  implicit val equal: Equal[Vader] = Deriving[Equal].xproductz(
-    Prod(Need(Equal[String]), Need(Equal[Int])))(iso.to, iso.from)
-}
-object JarJar {
-  ...
-  implicit val equal: Equal[JarJar] = Deriving[Equal].xproductz(
-    Prod(Need(Equal[Int]), Need(Equal[String])))(iso.to, iso.from)
-}
-#+END_SRC
-
-#+BEGIN_ASIDE
-Typeclasses in the =Deriving= API are wrapped in =Need= (recall =Name= from
-Chapter 6), which allows lazy construction, avoiding unnecessary work if the
-typeclass is not needed, and avoiding stack overflows for recursive ADTs.
-#+END_ASIDE
-
-To be able to do the same for our =Default= typeclass, we need to provide an
-instance of =Deriving[Default]=. This is just a case of wrapping our existing
-=Alt= with a helper:
-
-#+BEGIN_SRC scala
-object Default {
-  ...
-  implicit val deriving: Deriving[Default] = ExtendedInvariantAlt(monad)
-}
-#+END_SRC
-
-and then calling it from the companions
-
-#+BEGIN_SRC scala
-object Darth {
-  ...
-  implicit val default: Default[Darth] = Deriving[Default].xcoproductz(
-    Prod(Need(Default[Vader]), Need(Default[JarJar])))(iso.to, iso.from)
-}
-object Vader {
-  ...
-  implicit val default: Default[Vader] = Deriving[Default].xproductz(
-    Prod(Need(Default[String]), Need(Default[Int])))(iso.to, iso.from)
-}
-object JarJar {
-  ...
-  implicit val default: Default[JarJar] = Deriving[Default].xproductz(
-    Prod(Need(Default[Int]), Need(Default[String])))(iso.to, iso.from)
-}
-#+END_SRC
-
-We have solved the problem of arbitrary arity, but we have introduced even more
-boilerplate.
-
-The punchline is that the =@deriving= annotation, which comes from
-=deriving-plugin=, generates all this boilerplate automatically and only needs
-to be applied at the top level of an ADT:
-
-#+BEGIN_SRC scala
-@deriving(Equal, Default)
-sealed abstract class Darth { def widen: Darth = this }
-final case class Vader(s: String, i: Int)  extends Darth
-final case class JarJar(i: Int, s: String) extends Darth
-#+END_SRC
-
-Also included in =scalaz-deriving= are instances for =Order=, =Semigroup= and
-=Monoid=. Instances of =Show= and =Arbitrary= are available by installing the
-=scalaz-deriving-magnolia= and =scalaz-deriving-scalacheck= extras.
-
-You're welcome!
-
-**** Examples
-
-We finish our study of =scalaz-deriving= with fully worked implementations of
-all the example typeclasses. Before we do that we need to know about a new data
-type: =/~\=, aka the /snake in the road/, for containing two higher kinded
-structures that share the same type parameter:
-
-#+BEGIN_SRC scala
-sealed abstract class /~\[A[_], B[_]] {
-  type T
-  def a: A[T]
-  def b: B[T]
-}
-object /~\ {
-  type APair[A[_], B[_]]  = A /~\ B
-  def unapply[A[_], B[_]](p: A /~\ B): Some[(A[p.T], B[p.T])] = ...
-  def apply[A[_], B[_], Z](az: =>A[Z], bz: =>B[Z]): A /~\ B = ...
-}
-#+END_SRC
-
-We typically use this in the context of =Id /~\ TC= where =TC= is our typeclass,
-meaning that we have a value, and an instance of a typeclass for that value,
-without knowing anything about the value.
-
-In addition, all the methods on the =Deriving= API have implicit evidence of the
-form =A PairedWith FA=, allowing the =iotaz= library to be able to perform
-=.zip=, =.traverse=, and other operations on =Prod= and =Cop=. We can ignore
-these parameters, as we don't use them directly.
-
-***** =Equal=
-
-As with =Default= we could define a regular fixed-arity =Decidable= and wrap it
-with =ExtendedInvariantAlt= (the simplest approach), but we choose to implement
-=Decidablez= directly for the performance benefit. We make two additional
-optimisations:
-
-1. perform instance equality =.eq= before applying the =Equal.equal=, allowing
-   for shortcut equality between identical values.
-2. =Foldable.all= allowing early exit when any comparison is =false=. e.g. if
-   the first fields don't match, we don't even request the =Equal= for remaining
-   values.
-
-#+BEGIN_SRC scala
-  new Decidablez[Equal] {
-    @inline private final def quick(a: Any, b: Any): Boolean =
-      a.asInstanceOf[AnyRef].eq(b.asInstanceOf[AnyRef])
-
-    def dividez[Z, A <: TList, FA <: TList](tcs: Prod[FA])(g: Z => Prod[A])(
-      implicit ev: A PairedWith FA
-    ): Equal[Z] = (z1, z2) => (g(z1), g(z2)).zip(tcs).all {
-      case (a1, a2) /~\ fa => quick(a1, a2) || fa.value.equal(a1, a2)
-    }
-
-    def choosez[Z, A <: TList, FA <: TList](tcs: Prod[FA])(g: Z => Cop[A])(
-      implicit ev: A PairedWith FA
-    ): Equal[Z] = (z1, z2) => (g(z1), g(z2)).zip(tcs) match {
-      case -\/(_)               => false
-      case \/-((a1, a2) /~\ fa) => quick(a1, a2) || fa.value.equal(a1, a2)
-    }
-  }
-#+END_SRC
-
-***** =Default=
-
-Unfortunately, the =iotaz= API for =.traverse= (and its analogy, =.coptraverse=)
-requires us to define natural transformations, which have a clunky syntax, even
-with the =kind-projector= plugin.
-
-#+BEGIN_SRC scala
-  private type K[a] = Kleisli[String \/ ?, Unit, a]
-  new IsomorphismMonadError[Default, K, String] with Altz[Default] {
-    type Sig[a] = Unit => String \/ a
-    override val G = MonadError[K, String]
-    override val iso = Kleisli.iso(
-      λ[Sig ~> Default](s => instance(s(()))),
-      λ[Default ~> Sig](d => _ => d.default)
-    )
-
-    val extract = λ[NameF ~> (String \/ ?)](a => a.value.default)
-    def applyz[Z, A <: TList, FA <: TList](tcs: Prod[FA])(f: Prod[A] => Z)(
-      implicit ev: A PairedWith FA
-    ): Default[Z] = instance(tcs.traverse(extract).map(f))
-
-    val always = λ[NameF ~> Maybe](a => a.value.default.toMaybe)
-    def altlyz[Z, A <: TList, FA <: TList](tcs: Prod[FA])(f: Cop[A] => Z)(
-      implicit ev: A PairedWith FA
-    ): Default[Z] = instance {
-      tcs.coptraverse[A, NameF, Id](always).map(f).headMaybe \/> "not found"
-    }
-  }
-#+END_SRC
-
-***** =Semigroup=
-
-It is not possible to define a =Semigroup= for general coproducts, however it is
-possible to define one for general products. We can use the arbitrary arity
-=InvariantApplicative=:
-
-#+BEGIN_SRC scala
-  new InvariantApplicativez[Semigroup] {
-    type L[a] = ((a, a), NameF[a])
-    val appender = λ[L ~> Id] { case ((a1, a2), fa) => fa.value.append(a1, a2) }
-
-    def xproductz[Z, A <: TList, FA <: TList](tcs: Prod[FA])
-                                             (f: Prod[A] => Z, g: Z => Prod[A])
-                                             (implicit ev: A PairedWith FA) =
-      new Semigroup[Z] {
-        def append(z1: Z, z2: =>Z): Z = f(tcs.ziptraverse2(g(z1), g(z2), appender))
-      }
-  }
-#+END_SRC
-
-***** =JsEncoder= and =JsDecoder=
-
-=scalaz-deriving= does not provide access to field names so it is not possible
-to write a JSON encoder or decoder.
-
-#+BEGIN_ASIDE
-An earlier version of =scalaz-deriving= supported field names but it was clear
-that there was no advantage over using Magnolia, so the support was dropped to
-remain focused on typeclasses with lawful =Alt= and =Decidable=.
 #+END_ASIDE
 
 *** Magnolia
@@ -9776,7 +9076,7 @@ The Magnolia macro library provides a clean API for writing typeclass
 derivations. It is installed with the following =build.sbt= entry
 
 #+BEGIN_SRC scala
-libraryDependencies += "com.propensive" %% "magnolia" % "0.10.1"
+libraryDependencies += "com.propensive" %% "magnolia" % "0.14.4"
 #+END_SRC
 
 A typeclass author implements the following members:
@@ -9842,9 +9142,9 @@ The =Monadic= typeclass, used in =constructMonadic=, is automatically generated
 if our data type has a =.map= and =.flatMap= method when we =import mercator._=
 
 It does not make sense to use Magnolia for typeclasses that can be abstracted by
-=Divisible=, =Decidable=, =Applicative= or =Alt=, since those abstractions
-provide a lot of extra structure and tests for free. However, Magnolia offers
-features that =scalaz-deriving= cannot provide: access to field names, type
+=ContravariantMonoidal=, =Decidable=, =Applicative= or =Alt=, since those
+abstractions provide a lot of extra structure and tests for free. However,
+Magnolia offers features that Cats cannot provide: access to field names, type
 names, annotations and default values.
 
 **** Example: JSON
@@ -9896,8 +9196,8 @@ object JsMagnoliaEncoder {
   type Typeclass[A] = JsEncoder[A]
 
   def combine[A](ctx: CaseClass[JsEncoder, A]): JsEncoder[A] = { a =>
-    val empty = IList.empty[(String, JsValue)]
-    val fields = ctx.parameters.foldRight(right) { (p, acc) =>
+    val empty: List[(String, JsValue)] = Nil
+    val fields = ctx.parameters.foldRight(empty) { (p, acc) =>
       p.typeclass.toJson(p.dereference(a)) match {
         case JsNull => acc
         case value  => (p.label -> value) :: acc
@@ -9911,7 +9211,7 @@ object JsMagnoliaEncoder {
       val hint = "type" -> JsString(sub.typeName.short)
       sub.typeclass.toJson(sub.cast(a)) match {
         case JsObject(fields) => JsObject(hint :: fields)
-        case other            => JsObject(IList(hint, "xvalue" -> other))
+        case other            => JsObject(List(hint, "xvalue" -> other))
       }
     }
 
@@ -9945,7 +9245,7 @@ object JsMagnoliaEncoder {
       }.toArray
 
       def toJson(a: A): JsValue = {
-        val empty = IList.empty[(String, JsValue)]
+        val empty: List[(String, JsValue)] = Nil
         val fields = ctx.parameters.foldRight(empty) { (p, acc) =>
           val (nulls, field) = anns(p.index)
           p.typeclass.toJson(p.dereference(a)) match {
@@ -9976,7 +9276,7 @@ object JsMagnoliaEncoder {
         val (hint, xvalue) = anns(sub.index)
         sub.typeclass.toJson(sub.cast(a)) match {
           case JsObject(fields) => JsObject(hint :: fields)
-          case other            => JsObject(hint :: (xvalue -> other) :: IList.empty)
+          case other            => JsObject(hint :: (xvalue -> other) :: Nil)
         }
       }
     }
@@ -10003,7 +9303,7 @@ object JsMagnoliaDecoder {
   def dispatch[A](ctx: SealedTrait[JsDecoder, A]): JsDecoder[A] = {
     case obj @ JsObject(_) =>
       obj.get("type") match {
-        case \/-(JsString(hint)) =>
+        case Right(JsString(hint)) =>
           ctx.subtypes.find(_.typeName.short == hint) match {
             case None => fail(s"a valid '$hint'", obj)
             case Some(sub) =>
@@ -10040,7 +9340,7 @@ object JsMagnoliaDecoder {
         }.getOrElse(p.label)
       }.toArray
 
-      def fromJson(j: JsValue): String \/ A = j match {
+      def fromJson(j: JsValue): Either[String, A] = j match {
         case obj @ JsObject(_) =>
           import mercator._
           val lookup = obj.fields.toMap
@@ -10052,9 +9352,9 @@ object JsMagnoliaDecoder {
                 case Maybe.Just(value) => p.typeclass.fromJson(value)
                 case _ =>
                   p.default match {
-                    case Some(default) => \/-(default)
+                    case Some(default) => Right(default)
                     case None if nulls(p.index) =>
-                      s"missing field '$field'".left
+                      Left(s"missing field '$field'")
                     case None => p.typeclass.fromJson(JsNull)
                   }
               }
@@ -10079,10 +9379,10 @@ object JsMagnoliaDecoder {
         }.getOrElse("xvalue")
       }.toArray
 
-      def fromJson(j: JsValue): String \/ A = j match {
+      def fromJson(j: JsValue): Either[String, A] = j match {
         case obj @ JsObject(_) =>
           obj.get(typehint) match {
-            case \/-(JsString(h)) =>
+            case Right(JsString(h)) =>
               subtype.get(h) match {
                 case None => fail(s"a valid '$h'", obj)
                 case Some(sub) =>
@@ -10132,32 +9432,6 @@ companion of our data types. For example, the Google Maps API
   }
 #+END_SRC
 
-Thankfully, the =@deriving= annotation supports Magnolia! If the typeclass
-author provides a file =deriving.conf= with their jar, containing this text
-
-#+BEGIN_SRC scala
-jsonformat.JsEncoder=jsonformat.JsMagnoliaEncoder.gen
-jsonformat.JsDecoder=jsonformat.JsMagnoliaDecoder.gen
-#+END_SRC
-
-the =deriving-macro= will call the user-provided method:
-
-#+BEGIN_SRC scala
-  @deriving(JsEncoder, JsDecoder)
-  final case class Value(text: String, value: Int)
-  @deriving(JsEncoder, JsDecoder)
-  final case class Elements(distance: Value, duration: Value, status: String)
-  @deriving(JsEncoder, JsDecoder)
-  final case class Rows(elements: List[Elements])
-  @deriving(JsEncoder, JsDecoder)
-  final case class DistanceMatrix(
-    destination_addresses: List[String],
-    origin_addresses: List[String],
-    rows: List[Rows],
-    status: String
-  )
-#+END_SRC
-
 **** Fully Automatic Derivation
 
 Generating =implicit= instances on the companion of the data type is
@@ -10197,8 +9471,10 @@ The first caveat is self evident, but unexpected derivations manifests as
 subtle bugs. Consider what would happen for
 
 #+BEGIN_SRC scala
-@deriving(JsEncoder)
 final case class Foo(s: Option[String])
+object Foo {
+  implicit val jsencoder: JsEncoder[Foo] = gen
+}
 #+END_SRC
 
 if we forgot to provide an implicit derivation for =Option=. We might expect a
@@ -10233,12 +9509,6 @@ reason why it has such a reputation is because it takes the =implicit= language
 feature to the extreme: creating a kind of /generic programming/ language at the
 level of the types.
 
-This is not an entirely foreign concept: in Scalaz we try to limit our use of
-the =implicit= language feature to typeclasses, but we sometimes ask the
-compiler to provide us with /evidence/ relating types. For example Liskov or
-Leibniz relationship (=<~<= and ~===~), and to =Inject= a free algebra into a
-=scalaz.Coproduct= of algebras.
-
 #+BEGIN_ASIDE
 It is not necessary to understand Shapeless to be a Functional Programmer. If
 this chapter becomes too much, just skip to the next section.
@@ -10250,7 +9520,7 @@ To install Shapeless, add the following to =build.sbt=
 libraryDependencies += "com.chuusai" %% "shapeless" % "2.3.3"
 #+END_SRC
 
-At the core of Shapeless are the =HList= and =EitherK= data types
+At the core of Shapeless are the =HList= and =Coproduct= data types
 
 #+BEGIN_SRC scala
 package shapeless
@@ -10272,8 +9542,8 @@ sealed trait CNil extends Coproduct // no implementations
 which are /generic/ representations of products and coproducts, respectively.
 The =sealed trait HNil= is for convenience so we never need to type =HNil.type=.
 
-Shapeless has a clone of the =IsoSet= datatype, called =Generic=, which allows
-us to move between an ADT and its generic representation:
+Shapeless has a =Generic= typeclass, which allows us to move between an ADT and
+its generic representation:
 
 #+BEGIN_SRC scala
 trait Generic[T] {
@@ -10354,15 +9624,15 @@ Superficially, this is all we need to know about Shapeless to be able to derive
 a typeclass. However, things get increasingly complex, so we will proceed with
 increasingly complex examples.
 
-**** Example: Equal
+**** Example: Eq
 
 A typical pattern to follow is to extend the typeclass that we wish to derive,
 and put the Shapeless code on its companion. This gives us an implicit scope
 that the compiler can search without requiring complex imports
 
 #+BEGIN_SRC scala
-trait DerivedEqual[A] extends Equal[A]
-object DerivedEqual {
+trait DerivedEq[A] extends Eq[A]
+object DerivedEq {
   ...
 }
 #+END_SRC
@@ -10376,18 +9646,18 @@ signature and simple implementation:
 #+BEGIN_SRC scala
 import shapeless._
 
-object DerivedEqual {
-  def gen[A, R: DerivedEqual](implicit G: Generic.Aux[A, R]): Equal[A] =
-    (a1, a2) => Equal[R].equal(G.to(a1), G.to(a2))
+object DerivedEq {
+  def gen[A, R: DerivedEq](implicit G: Generic.Aux[A, R]): Eq[A] =
+    (a1, a2) => Eq[R].eqv(G.to(a1), G.to(a2))
 }
 #+END_SRC
 
-We've reduced the problem to providing an implicit =Equal[R]= for an =R= that is
+We've reduced the problem to providing an implicit =Eq[R]= for an =R= that is
 the =Generic= representation of =A=. First consider products, where =R <:
 HList=. This is the signature we want to implement:
 
 #+BEGIN_SRC scala
-  implicit def hcons[H: Equal, T <: HList: DerivedEqual]: DerivedEqual[H :: T]
+  implicit def hcons[H: Eq, T <: HList: DerivedEq]: DerivedEq[H :: T]
 #+END_SRC
 
 because if we can implement it for a head and a tail, the compiler will be able
@@ -10395,57 +9665,47 @@ to recurse on this method until it reaches the end of the list. Where we will
 need to provide an instance for the empty =HNil=
 
 #+BEGIN_SRC scala
-  implicit def hnil: DerivedEqual[HNil]
+  implicit def hnil: DerivedEq[HNil]
 #+END_SRC
 
 We implement these methods
 
 #+BEGIN_SRC scala
-  implicit def hcons[H: Equal, T <: HList: DerivedEqual]: DerivedEqual[H :: T] =
-    (h1, h2) => Equal[H].equal(h1.head, h2.head) && Equal[T].equal(h1.tail, h2.tail)
+  implicit def hcons[H: Eq, T <: HList: DerivedEq]: DerivedEq[H :: T] =
+    (h1, h2) => Eq[H].eqv(h1.head, h2.head) && Eq[T].eqv(h1.tail, h2.tail)
 
-  implicit val hnil: DerivedEqual[HNil] = (_, _) => true
+  implicit val hnil: DerivedEq[HNil] = (_, _) => true
 #+END_SRC
 
 and for coproducts we want to implement these signatures
 
 #+BEGIN_SRC scala
-  implicit def ccons[H: Equal, T <: Coproduct: DerivedEqual]: DerivedEqual[H :+: T]
-  implicit def cnil: DerivedEqual[CNil]
+  implicit def ccons[H: Eq, T <: Coproduct: DerivedEq]: DerivedEq[H :+: T]
+  implicit def cnil: DerivedEq[CNil]
 #+END_SRC
 
-#+BEGIN_ASIDE
-Scalaz and Shapeless share many type names, when mixing them we often need to
-exclude certain elements from the import, e.g.
-
-#+BEGIN_SRC scala
-import scalaz.{ Coproduct => _, :+: => _, _ }, Scalaz._
-import shapeless._
-#+END_SRC
-#+END_ASIDE
-
-=.cnil= will never be called for a typeclass like =Equal= with type parameters
+=.cnil= will never be called for a typeclass like =Eq= with type parameters
 only in contravariant position, but the compiler doesn't know that so we have to
 provide a stub:
 
 #+BEGIN_SRC scala
-  implicit val cnil: DerivedEqual[CNil] = (_, _) => sys.error("impossible")
+  implicit val cnil: DerivedEq[CNil] = (_, _) => sys.error("impossible")
 #+END_SRC
 
 For the coproduct case we can only compare two things if they align, which is
 when they are both =Inl= or =Inr=
 
 #+BEGIN_SRC scala
-  implicit def ccons[H: Equal, T <: Coproduct: DerivedEqual]: DerivedEqual[H :+: T] = {
-    case (Inl(c1), Inl(c2)) => Equal[H].equal(c1, c2)
-    case (Inr(c1), Inr(c2)) => Equal[T].equal(c1, c2)
+  implicit def ccons[H: Eq, T <: Coproduct: DerivedEq]: DerivedEq[H :+: T] = {
+    case (Inl(c1), Inl(c2)) => Eq[H].eqv(c1, c2)
+    case (Inr(c1), Inr(c2)) => Eq[T].eqv(c1, c2)
     case _                  => false
   }
 #+END_SRC
 
-It is noteworthy that our methods align with the concept of =conquer= (=hnil=),
-=divide2= (=hlist=) and =alt2= (=coproduct=)! However, we don't get any of the
-advantages of implementing =Decidable=, as now we must start from scratch when
+It is noteworthy that our methods align with the concept of =.trivial= (=hnil=)
+and =.contramap2= (=hlist=)! However, we don't get any of the advantages of
+implementing =ContravariantMonoidal=, as now we must start from scratch when
 writing tests for this code.
 
 So let's test this thing with a simple ADT
@@ -10461,16 +9721,16 @@ We need to provide instances on the companions:
 
 #+BEGIN_SRC scala
 object Foo {
-  implicit val equal: Equal[Foo] = DerivedEqual.gen
+  implicit val equal: Eq[Foo] = DerivedEq.gen
 }
 object Bar {
-  implicit val equal: Equal[Bar] = DerivedEqual.gen
+  implicit val equal: Eq[Bar] = DerivedEq.gen
 }
 object Faz {
-  implicit val equal: Equal[Faz] = DerivedEqual.gen
+  implicit val equal: Eq[Faz] = DerivedEq.gen
 }
 final case object Baz extends Foo {
-  implicit val equal: Equal[Baz.type] = DerivedEqual.gen
+  implicit val equal: Eq[Baz.type] = DerivedEq.gen
 }
 #+END_SRC
 
@@ -10478,94 +9738,62 @@ But it doesn't compile
 
 #+BEGIN_SRC
 [error] shapeless.scala:41:38: ambiguous implicit values:
-[error]  both value hnil in object DerivedEqual of type => DerivedEqual[HNil]
-[error]  and value cnil in object DerivedEqual of type => DerivedEqual[CNil]
-[error]  match expected type DerivedEqual[R]
-[error]     : Equal[Baz.type] = DerivedEqual.gen
-[error]                                      ^
+[error]  both value hnil in object DerivedEq of type => DerivedEq[HNil]
+[error]  and value cnil in object DerivedEq of type => DerivedEq[CNil]
+[error]  match expected type DerivedEq[R]
+[error]     : Eq[Baz.type] = DerivedEq.gen
 #+END_SRC
 
-Welcome to Shapeless compilation errors!
-
 The problem, which is not at all evident from the error, is that the compiler is
-unable to work out what =R= is, and gets caught thinking it is something else.
+unable to work out what =R= is.
 We need to provide the explicit type parameters when calling =gen=, e.g.
 
 #+BEGIN_SRC scala
-implicit val equal: Equal[Baz.type] = DerivedEqual.gen[Baz.type, HNil]
+implicit val equal: Eq[Baz.type] = DerivedEq.gen[Baz.type, HNil]
 #+END_SRC
 
 or we can use the =Generic= macro to help us and let the compiler infer the generic representation
 
 #+BEGIN_SRC scala
 final case object Baz extends Foo {
-  implicit val generic                = Generic[Baz.type]
-  implicit val equal: Equal[Baz.type] = DerivedEqual.gen[Baz.type, generic.Repr]
+  implicit val generic             = Generic[Baz.type]
+  implicit val equal: Eq[Baz.type] = DerivedEq.gen[Baz.type, generic.Repr]
 }
 ...
 #+END_SRC
 
-#+BEGIN_ASIDE
-At this point, ignore any red squigglies and only trust the compiler. This is
-the point where Shapeless departs from IDE support.
-#+END_ASIDE
-
 The reason why this fixes the problem is because the type signature
 
 #+BEGIN_SRC scala
-def gen[A, R: DerivedEqual](implicit G: Generic.Aux[A, R]): Equal[A]
+def gen[A, R: DerivedEq](implicit G: Generic.Aux[A, R]): Eq[A]
 #+END_SRC
 
 desugars into
 
 #+BEGIN_SRC scala
-def gen[A, R](implicit R: DerivedEqual[R], G: Generic.Aux[A, R]): Equal[A]
+def gen[A, R](implicit R: DerivedEq[R], G: Generic.Aux[A, R]): Eq[A]
 #+END_SRC
 
 The Scala compiler solves type constraints left to right, so it finds many
-different solutions to =DerivedEqual[R]= before constraining it with the
+different solutions to =DerivedEq[R]= before constraining it with the
 =Generic.Aux[A, R]=. Another way to solve this is to not use context bounds.
 
-#+BEGIN_ASIDE
-Rather than present the fully working version, we feel it is important to show
-when obvious code fails, such is the reality of Shapeless. Another thing we
-could have reasonably done here is to have =sealed= the =DerivedEqual= trait so
-that only derived versions are valid. But =sealed trait= is not compatible with
-SAM types! Living at the razor's edge, expect to get cut.
-#+END_ASIDE
-
-With this in mind, we no longer need the =implicit val generic= or the explicit
-type parameters on the call to =.gen=. We can wire up =@deriving= by adding an
-entry in =deriving.conf= (assuming we want to override the =scalaz-deriving=
-implementation)
+However, this implementation still has a bug: it fails for recursive types *at
+runtime*, e.g.
 
 #+BEGIN_SRC scala
-scalaz.Equal=fommil.DerivedEqual.gen
-#+END_SRC
-
-and write
-
-#+BEGIN_SRC scala
-@deriving(Equal) sealed abstract class Foo
-@deriving(Equal) final case class Bar(s: String)          extends Foo
-@deriving(Equal) final case class Faz(b: Boolean, i: Int) extends Foo
-@deriving(Equal) final case object Baz
-#+END_SRC
-
-But replacing the =scalaz-deriving= version means that compile times get slower.
-This is because the compiler is solving =N= implicit searches for each product
-of =N= fields or coproduct of =N= products, whereas =scalaz-deriving= and
-Magnolia do not.
-
-Note that when using =scalaz-deriving= or Magnolia we can put the =@deriving= on
-just the top member of an ADT, but for Shapeless we must add it to all entries.
-
-However, this implementation still has a bug: it fails for recursive types *at runtime*, e.g.
-
-#+BEGIN_SRC scala
-@deriving(Equal) sealed trait ATree
-@deriving(Equal) final case class Leaf(value: String)               extends ATree
-@deriving(Equal) final case class Branch(left: ATree, right: ATree) extends ATree
+sealed trait ATree
+object ATree {
+  implicit val equal: Eq[ATree] = gen
+}
+final case class Leaf(value: String)               extends ATree
+object Leaf {
+  implicit val equal: Eq[Leaf] = gen
+}
+final case class Branch(left: ATree, right: ATree) extends ATree
+object Branch {
+  implicit val equal: Eq[Branch] = gen
+}
 #+END_SRC
 
 #+BEGIN_SRC scala
@@ -10575,63 +9803,58 @@ scala> val leaf1: Leaf    = Leaf("hello")
        val tree1: ATree   = Branch(leaf1, branch)
        val tree2: ATree   = Branch(leaf2, branch)
 
-scala> assert(tree1 /== tree2)
+scala> assert(tree1 =!= tree2)
 [error] java.lang.NullPointerException
-[error] at DerivedEqual$.shapes$DerivedEqual$$$anonfun$hcons$1(shapeless.scala:16)
+[error] at DerivedEq$.shapes$DerivedEq$$$anonfun$hcons$1(shapeless.scala:16)
         ...
 #+END_SRC
 
-The reason why this happens is because =Equal[Tree]= depends on the
-=Equal[Branch]=, which depends on the =Equal[Tree]=. Recursion and BANG!
+The reason why this happens is because =Eq[Tree]= depends on the
+=Eq[Branch]=, which depends on the =Eq[Tree]=. Recursion and BANG!
 It must be loaded lazily, not eagerly.
-
-Both =scalaz-deriving= and Magnolia deal with lazy automatically, but in
-Shapeless it is the responsibility of the typeclass author.
 
 The macro types =Cached=, =Strict= and =Lazy= modify the compiler's type
 inference behaviour allowing us to achieve the laziness we require. The pattern
 to follow is to use =Cached[Strict[_]]= on the entry point and =Lazy[_]= around
 the =H= instances.
 
-It is best to depart from context bounds and SAM types entirely at this point:
-
 #+BEGIN_SRC scala
-sealed trait DerivedEqual[A] extends Equal[A]
-object DerivedEqual {
+sealed trait DerivedEq[A] extends Eq[A]
+object DerivedEq {
   def gen[A, R](
     implicit G: Generic.Aux[A, R],
-    R: Cached[Strict[DerivedEqual[R]]]
-  ): Equal[A] = new Equal[A] {
-    def equal(a1: A, a2: A) =
-      quick(a1, a2) || R.value.value.equal(G.to(a1), G.to(a2))
+    R: Cached[Strict[DerivedEq[R]]]
+  ): Eq[A] = new Eq[A] {
+    def eqv(a1: A, a2: A) =
+      quick(a1, a2) || R.value.value.eqv(G.to(a1), G.to(a2))
   }
 
   implicit def hcons[H, T <: HList](
-    implicit H: Lazy[Equal[H]],
-    T: DerivedEqual[T]
-  ): DerivedEqual[H :: T] = new DerivedEqual[H :: T] {
-    def equal(ht1: H :: T, ht2: H :: T) =
-      (quick(ht1.head, ht2.head) || H.value.equal(ht1.head, ht2.head)) &&
-        T.equal(ht1.tail, ht2.tail)
+    implicit H: Lazy[Eq[H]],
+    T: DerivedEq[T]
+  ): DerivedEq[H :: T] = new DerivedEq[H :: T] {
+    def eqv(ht1: H :: T, ht2: H :: T) =
+      (quick(ht1.head, ht2.head) || H.value.eqv(ht1.head, ht2.head)) &&
+        T.eqv(ht1.tail, ht2.tail)
   }
 
-  implicit val hnil: DerivedEqual[HNil] = new DerivedEqual[HNil] {
-    def equal(@unused h1: HNil, @unused h2: HNil) = true
+  implicit val hnil: DerivedEq[HNil] = new DerivedEq[HNil] {
+    def eqv(h1: HNil, h2: HNil) = true
   }
 
   implicit def ccons[H, T <: Coproduct](
-    implicit H: Lazy[Equal[H]],
-    T: DerivedEqual[T]
-  ): DerivedEqual[H :+: T] = new DerivedEqual[H :+: T] {
-    def equal(ht1: H :+: T, ht2: H :+: T) = (ht1, ht2) match {
-      case (Inl(c1), Inl(c2)) => quick(c1, c2) || H.value.equal(c1, c2)
-      case (Inr(c1), Inr(c2)) => T.equal(c1, c2)
+    implicit H: Lazy[Eq[H]],
+    T: DerivedEq[T]
+  ): DerivedEq[H :+: T] = new DerivedEq[H :+: T] {
+    def eqv(ht1: H :+: T, ht2: H :+: T) = (ht1, ht2) match {
+      case (Inl(c1), Inl(c2)) => quick(c1, c2) || H.value.eqv(c1, c2)
+      case (Inr(c1), Inr(c2)) => T.eqv(c1, c2)
       case _                  => false
     }
   }
 
-  implicit val cnil: DerivedEqual[CNil] = new DerivedEqual[CNil] {
-    def equal(@unused c1: CNil, @unused c2: CNil) = sys.error("impossible")
+  implicit val cnil: DerivedEq[CNil] = new DerivedEq[CNil] {
+    def eqv(c1: CNil, c2: CNil) = sys.error("impossible")
   }
 
   @inline private final def quick(a: Any, b: Any): Boolean =
@@ -10639,23 +9862,19 @@ object DerivedEqual {
 }
 #+END_SRC
 
-While we were at it, we optimised using the =quick= shortcut from
-=scalaz-deriving=.
-
 We can now call
 
 #+BEGIN_SRC scala
-assert(tree1 /== tree2)
+assert(tree1 =!= tree2)
 #+END_SRC
 
 without a runtime exception.
 
 **** Example: =Default=
 
-There are no new snares in the implementation of a typeclass with a type
-parameter in covariant position. Here we create =HList= and =EitherK= values,
-and must provide a value for the =CNil= case as it corresponds to the case where
-no coproduct is able to provide a value.
+Here we create =HList= and =Coproduct= values, and must provide a value for the
+=CNil= case as it corresponds to the case where no coproduct is able to provide
+a value.
 
 #+BEGIN_SRC scala
 sealed trait DerivedDefault[A] extends Default[A]
@@ -10679,7 +9898,7 @@ object DerivedDefault {
   }
 
   implicit val hnil: DerivedDefault[HNil] = new DerivedDefault[HNil] {
-    def default = HNil.right
+    def default = Right(HNil)
   }
 
   implicit def ccons[H, T <: Coproduct](
@@ -10690,14 +9909,14 @@ object DerivedDefault {
   }
 
   implicit val cnil: DerivedDefault[CNil] = new DerivedDefault[CNil] {
-    def default = "not a valid coproduct".left
+    def default = Left("not a valid coproduct")
   }
 }
 #+END_SRC
 
-Much as we could draw an analogy between =Equal= and =Decidable=, we can see the
-relationship to =Alt= in =.point= (=hnil=), =.map2= (=.hcons=) and =.altly2=
-(=.ccons=).
+Much as we could draw an analogy between =Eq= and =ContravariantMonoidal=, we
+can see the relationship to =Applicative= in =.point= (=hnil=) and =.map2=
+(=.hcons=).
 
 There is little to be learned from an example like =Semigroup=, so we will skip
 to encoders and decoders.
@@ -10724,7 +9943,7 @@ type signature to =JsEncoder=.
 import shapeless._, labelled._
 
 sealed trait DerivedJsEncoder[R] {
-  def toJsFields(r: R): IList[(String, JsValue)]
+  def toJsFields(r: R): List[(String, JsValue)]
 }
 object DerivedJsEncoder {
   def gen[A, R](
@@ -10755,7 +9974,7 @@ object DerivedJsEncoder {
 
   implicit val hnil: DerivedJsEncoder[HNil] =
     new DerivedJsEncoder[HNil] {
-      def toJsFields(h: HNil) = IList.empty
+      def toJsFields(h: HNil) = Nil
     }
 
   implicit def ccons[K <: Symbol, H, T <: Coproduct](
@@ -10770,7 +9989,7 @@ object DerivedJsEncoder {
         case Inl(head) =>
           H.value.toJson(head) match {
             case JsObject(fields) => hint :: fields
-            case v                => IList.single("xvalue" -> v)
+            case v                => List("xvalue" -> v)
           }
 
         case Inr(tail) => T.toJsFields(tail)
@@ -10784,30 +10003,6 @@ object DerivedJsEncoder {
 
 }
 #+END_SRC
-
-#+BEGIN_ASIDE
-A pattern has emerged in many Shapeless derivation libraries that introduce
-"hints" with a default =implicit=
-
-#+BEGIN_SRC scala
-  trait ProductHint[A] {
-    def nulls(field: String): Boolean
-    def fieldname(field: String): String
-  }
-  object ProductHint {
-    implicit def default[A]: ProductHint[A] = new ProductHint[A] {
-      def nulls(field: String)     = false
-      def fieldname(field: String) = field
-    }
-  }
-#+END_SRC
-
-Users are supposed to provide a custom instance of =ProductHint= on their
-companions or package objects. This is a *terrible idea* that relies on fragile
-implicit ordering and is a source of typeclass decoherence: if we derive a
-=JsEncoder[Foo]=, we will get a different result depending on which
-=ProductHint[Foo]= is in scope. It is best avoided.
-#+END_ASIDE
 
 Shapeless selects codepaths at compiletime based on the presence of annotations,
 which can lead to more optimised code, at the expense of code repetition. This
@@ -10865,7 +10060,7 @@ the compiler must first fix the type of =J= before it can solve for =R=.
 
 #+BEGIN_SRC scala
 sealed trait DerivedJsEncoder[A, R, J <: HList] {
-  def toJsFields(r: R, anns: J): IList[(String, JsValue)]
+  def toJsFields(r: R, anns: J): List[(String, JsValue)]
 }
 object DerivedJsEncoder extends DerivedJsEncoder1 {
   def gen[A, R, J <: HList](
@@ -10879,7 +10074,7 @@ object DerivedJsEncoder extends DerivedJsEncoder1 {
 
   implicit def hnil[A]: DerivedJsEncoder[A, HNil, HNil] =
     new DerivedJsEncoder[A, HNil, HNil] {
-      def toJsFields(h: HNil, a: HNil) = IList.empty
+      def toJsFields(h: HNil, a: HNil) = Nil
     }
 
   implicit def cnil[A]: DerivedJsEncoder[A, CNil, HNil] =
@@ -10920,7 +10115,7 @@ private[jsonformat] trait DerivedJsEncoder1 {
           case Inl(head) =>
             H.value.toJson(head) match {
               case JsObject(fields) => hint :: fields
-              case v                => IList.single("xvalue" -> v)
+              case v                => List("xvalue" -> v)
             }
           case Inr(tail) => T.toJsFields(tail, anns.tail)
         }
@@ -11004,7 +10199,7 @@ delete two methods.
         case Inl(head) =>
           H.value.toJson(head) match {
             case JsObject(fields) => hint :: fields
-            case v                => IList.single("xvalue" -> v)
+            case v                => List("xvalue" -> v)
           }
         case Inr(tail) => T.toJsFields(tail, anns.tail)
       }
@@ -11025,7 +10220,7 @@ and
               hint :: fields
             case v =>
               val xvalue = ann.field.getOrElse("xvalue")
-              IList.single(xvalue -> v)
+              List(xvalue -> v)
           }
         case Inr(tail) => T.toJsFields(tail, anns.tail)
       }
@@ -11066,7 +10261,7 @@ and
               hint :: fields
             case v =>
               val xvalue = ann.field.getOrElse("xvalue")
-              IList.single(xvalue -> v)
+              List(xvalue -> v)
           }
         case Inr(tail) => T.toJsFields(tail, anns.tail)
       }
@@ -11086,73 +10281,6 @@ time on downstream users. Such optimisations are beyond the scope of this book,
 but they are possible and people do them: the ability to shift work from runtime
 to compiletime is one of the most appealing things about generic programming.
 
-One more caveat that we need to be aware of: [[https://github.com/milessabin/shapeless/issues/309][=LabelledGeneric= is not compatible
-with =scalaz.@@=]], but there is a workaround. Say we want to effectively ignore
-tags so we add the following derivation rules to the companions of our encoder
-and decoder
-
-#+BEGIN_SRC scala
-object JsEncoder {
-  ...
-  implicit def tagged[A: JsEncoder, Z]: JsEncoder[A @@ Z] =
-    JsEncoder[A].contramap(Tag.unwrap)
-}
-object JsDecoder {
-  ...
-  implicit def tagged[A: JsDecoder, Z]: JsDecoder[A @@ Z] =
-    JsDecoder[A].map(Tag(_))
-}
-#+END_SRC
-
-We would then expect to be able to derive a =JsDecoder= for something like our
-=TradeTemplate= from Chapter 5
-
-#+BEGIN_SRC scala
-final case class TradeTemplate(
-  otc: Option[Boolean] @@ Tags.Last
-)
-object TradeTemplate {
-  implicit val encoder: JsEncoder[TradeTemplate] = DerivedJsEncoder.gen
-}
-#+END_SRC
-
-But we instead get a compiler error
-
-#+BEGIN_SRC
-[error] could not find implicit value for parameter G: LabelledGeneric.Aux[A,R]
-[error]   implicit val encoder: JsEncoder[TradeTemplate] = DerivedJsEncoder.gen
-[error]                                                                     ^
-#+END_SRC
-
-The error message is as helpful as always. The workaround is to introduce evidence for =H @@ Z= on the lower priority implicit scope, and then just call the code that the compiler should have found in the first place:
-
-#+BEGIN_SRC scala
-object DerivedJsEncoder extends DerivedJsEncoder1 with DerivedJsEncoder2 {
-  ...
-}
-private[jsonformat] trait DerivedJsEncoder2 {
-  this: DerivedJsEncoder.type =>
-
-  // WORKAROUND https://github.com/milessabin/shapeless/issues/309
-  implicit def hconsTagged[A, K <: Symbol, H, Z, T <: HList, J <: HList](
-    implicit
-    K: Witness.Aux[K],
-    H: Lazy[JsEncoder[H @@ Z]],
-    T: DerivedJsEncoder[A, T, J]
-  ): DerivedJsEncoder[A, FieldType[K, H @@ Z] :: T, None.type :: J] = hcons(K, H, T)
-
-  implicit def hconsCustomTagged[A, K <: Symbol, H, Z, T <: HList, J <: HList](
-    implicit
-    K: Witness.Aux[K],
-    H: Lazy[JsEncoder[H @@ Z]],
-    T: DerivedJsEncoder[A, T, J]
-  ): DerivedJsEncoder[A, FieldType[K, H @@ Z] :: T, Some[json] :: J] = hconsCustom(K, H, T)
-}
-
-#+END_SRC
-
-Thankfully, we only need to consider products, since coproducts cannot be tagged.
-
 **** =JsDecoder=
 
 The decoding side is much as we can expect based on previous examples. We can
@@ -11161,7 +10289,7 @@ Supporting only the sensible defaults means we write:
 
 #+BEGIN_SRC scala
 sealed trait DerivedJsDecoder[A] {
-  def fromJsObject(j: JsObject): String \/ A
+  def fromJsObject(j: JsObject): Either[String, A]
 }
 object DerivedJsDecoder {
   def gen[A, R](
@@ -11192,7 +10320,7 @@ object DerivedJsDecoder {
     }
 
   implicit val hnil: DerivedJsDecoder[HNil] = new DerivedJsDecoder[HNil] {
-    private val nil               = HNil.right[String]
+    private val nil               = Right(HNil)
     def fromJsObject(j: JsObject) = nil
   }
 
@@ -11208,8 +10336,8 @@ object DerivedJsDecoder {
         if (j.fields.element(hint)) {
           j.get("xvalue")
             .into {
-              case \/-(xvalue) => H.value.fromJson(xvalue)
-              case -\/(_)      => H.value.fromJson(j)
+              case Right(xvalue) => H.value.fromJson(xvalue)
+              case Left(_)      => H.value.fromJson(j)
             }
             .map(h => Inl(field[K](h)))
         } else
@@ -11240,13 +10368,13 @@ sealed trait DerivedProductJsDecoder[A, R, J <: HList, D <: HList] {
     j: Map[String, JsValue],
     anns: J,
     defaults: D
-  ): String \/ R
+  ): Either[String, R]
 }
 #+END_SRC
 
 We can request evidence of default values with =Default.Aux[A, D]= and duplicate
 all the methods to deal with the case where we do and do not have a default
-value. However, Shapeless is merciful (for once) and provides
+value. However, Shapeless is merciful and provides
 =Default.AsOptions.Aux[A, D]= letting us handle defaults at runtime.
 
 #+BEGIN_SRC scala
@@ -11275,7 +10403,7 @@ object DerivedProductJsDecoder {
   ...
     implicit def hnil[A]: DerivedProductJsDecoder[A, HNil, HNil, HNil] =
     new DerivedProductJsDecoder[A, HNil, HNil, HNil] {
-      private val nil = HNil.right[String]
+      private val nil = Right(HNil)
       def fromJsObject(j: StringyMap[JsValue], a: HNil, defaults: HNil) = nil
     }
 
@@ -11297,7 +10425,7 @@ object DerivedProductJsDecoder {
                    case Maybe.Just(v) => H.value.fromJson(v)
                    case _ =>
                      defaults.head match {
-                       case Some(default) => \/-(default)
+                       case Some(default) => Right(default)
                        case None          => H.value.fromJson(JsNull)
                      }
                  }
@@ -11306,99 +10434,11 @@ object DerivedProductJsDecoder {
     }
   ...
 }
-
 #+END_SRC
-
-We can no longer use =@deriving= for products and coproducts: there can only be
-one entry in the =deriving.conf= file.
-
-Oh, and don't forget to add =@@= support
-
-#+BEGIN_SRC scala
-object DerivedProductJsDecoder extends DerivedProductJsDecoder1 {
-  ...
-}
-private[jsonformat] trait DerivedProductJsDecoder2 {
-  this: DerivedProductJsDecoder.type =>
-
-  implicit def hconsTagged[
-    A, K <: Symbol, H, Z, T <: HList, J <: HList, D <: HList
-  ](
-    implicit
-    K: Witness.Aux[K],
-    H: Lazy[JsDecoder[H @@ Z]],
-    T: DerivedProductJsDecoder[A, T, J, D]
-  ): DerivedProductJsDecoder[
-    A,
-    FieldType[K, H @@ Z] :: T,
-    None.type :: J,
-    Option[H @@ Z] :: D
-  ] = hcons(K, H, T)
-
-  implicit def hconsCustomTagged[
-    A, K <: Symbol, H, Z, T <: HList, J <: HList, D <: HList
-  ](
-    implicit
-    K: Witness.Aux[K],
-    H: Lazy[JsDecoder[H @@ Z]],
-    T: DerivedProductJsDecoder[A, T, J, D]
-  ): DerivedProductJsDecoder[
-    A,
-    FieldType[K, H @@ Z] :: T,
-    Some[json] :: J,
-    Option[H @@ Z] :: D
-  ] = hconsCustomTagged(K, H, T)
-}
-#+END_SRC
-
-**** Complicated Derivations
-
-Shapeless allows for a lot more kinds of derivations than are possible with
-=scalaz-deriving= or Magnolia. As an example of an encoder / decoder that are
-not possible with Magnolia, consider this XML model from [[https://github.com/scalaz/scalaz-deriving/tree/master/examples/xmlformat][=xmlformat=]]
-
-#+BEGIN_SRC scala
-@deriving(Equal, Show, Arbitrary)
-sealed abstract class XNode
-
-@deriving(Equal, Show, Arbitrary)
-final case class XTag(
-  name: String,
-  attrs: IList[XAttr],
-  children: IList[XTag],
-  body: Maybe[XString]
-)
-
-@deriving(Equal, Show, Arbitrary)
-final case class XAttr(name: String, value: XString)
-
-@deriving(Show)
-@xderiving(Equal, Monoid, Arbitrary)
-final case class XChildren(tree: IList[XTag]) extends XNode
-
-@deriving(Show)
-@xderiving(Equal, Semigroup, Arbitrary)
-final case class XString(text: String) extends XNode
-#+END_SRC
-
-Given the nature of XML it makes sense to have separate encoder / decoder pairs
-for =XChildren= and =XString= content. We could provide a derivation for the
-=XChildren= with Shapeless but we want to special case fields based on the kind
-of typeclass they have, as well as =Option= fields. We could even require that
-fields are annotated with their encoded name. In addition, when decoding we wish
-to have different strategies for handling XML element bodies, which can be
-multipart, depending on if our type has a =Semigroup=, =Monoid= or neither.
-
-#+BEGIN_ASIDE
-Many developers believe XML is simply a more verbose form of JSON, with angle
-brackets instead of curlies. However, an attempt to write a round trip converter
-between =XNode= and =JsValue= should convince us that JSON and XML are different
-species, with conversions only possible on a case-by-case basis.
-#+END_ASIDE
 
 **** Example: =UrlQueryWriter=
 
-Along similar lines as =xmlformat=, our =drone-dynamic-agents= application could
+Our =drone-dynamic-agents= application could
 benefit from a typeclass derivation of the =UrlQueryWriter= typeclass, which is
 built out of =UrlEncodedWriter= instances for each field entry. It does not
 support coproducts:
@@ -11418,7 +10458,7 @@ object DerivedUrlQueryWriter {
   }
 
   implicit val hnil: DerivedUrlQueryWriter[HNil] = { _ =>
-    UrlQuery(IList.empty)
+    UrlQuery(Nil)
   }
   implicit def hcons[Key <: Symbol, A, Remaining <: HList](
     implicit Key: Witness.Aux[Key],
@@ -11451,19 +10491,9 @@ object UrlEncodedWriterMagnolia {
 }
 #+END_SRC
 
-**** The Dark Side of Derivation
+**** Drawbacks
 
-#+BEGIN_QUOTE
-"Beware fully automatic derivation. Anger, fear, aggression; the dark side of
-the derivation are they. Easily they flow, quick to join you in a fight. If once
-you start down the dark path, forever will it dominate your compiler, consume
-you it will."
-
-― an ancient Shapeless master
-#+END_QUOTE
-
-In addition to all the warnings about fully automatic derivation that were
-mentioned for Magnolia, Shapeless is *much* worse. Not only is fully automatic
+Not only is fully automatic
 Shapeless derivation [[https://www.scala-lang.org/blog/2018/06/04/scalac-profiling.html][the most common cause of slow compiles]], it is also a
 painful source of typeclass coherence bugs.
 
@@ -11476,8 +10506,11 @@ example, consider this code if our =.gen= were implicit
 #+BEGIN_SRC scala
 import DerivedJsEncoder._
 
-@xderiving(JsEncoder)
 final case class Foo(s: String)
+object Foo {
+  implicit val jsencoder: JsEncoder[Foo] = JsEncoder[String].contramap(_.s)
+}
+
 final case class Bar(foo: Foo)
 #+END_SRC
 
@@ -11489,7 +10522,7 @@ We might expect the full-auto encoded form of =Bar("hello")= to look like
 }
 #+END_SRC
 
-because we have used =xderiving= for =Foo=. But it can instead be
+because we have used =.contramap= for =Foo=. But it can instead be
 
 #+BEGIN_SRC json
 {
@@ -11507,9 +10540,8 @@ Fundamentally, when writing generic programs, implicits can be ignored by the
 compiler depending on scope, meaning that we lose the compiletime safety that
 was our motivation for programming at the type level in the first place!
 
-Everything is much simpler in the light side, where =implicit= is only used for
-coherent, globally unique, typeclasses. Fear of boilerplate is the path to the
-dark side. Fear leads to anger. Anger leads to hate. Hate leads to suffering.
+Everything is much simpler when =implicit= is only used for
+coherent, globally unique, typeclasses.
 
 *** Performance
 
@@ -11536,7 +10568,7 @@ For a typical Shapeless derivation, we get a lively chart
 [[file:images/implicit-flamegraph-jsonformat-jmh.png]]
 
 almost the entire compile time is spent in implicit resolution. Note that this
-also includes compiling the =scalaz-deriving=, Magnolia and manual instances,
+also includes compiling the Magnolia and manual instances,
 but the Shapeless computations dominate.
 
 And this is when it works. If there is a problem with a shapeless derivation,
@@ -11630,57 +10662,7 @@ Just when we thought we were seeing a pattern, both Magnolia and Shapeless win
 the race when decoding invalid GeoJSON data, but manual instances win the Google
 Maps and Twitter challenges.
 
-We want to include =scalaz-deriving= in the comparison, so we compare an
-equivalent implementation of =Equal=, tested on two values that contain the same
-contents (=True=) and two values that contain slightly different contents
-(=False=)
-
-#+BEGIN_SRC scala
-> jsonformat/jmh:run -i 5 -wi 5 -f1 -t1 -w1 -r1 .*equal*
-Benchmark                                     Mode  Cnt        Score       Error  Units
-
-GeoJSONBenchmarks.equalScalazTrue            thrpt    5   276851.493 ±  1776.428  ops/s
-GeoJSONBenchmarks.equalMagnoliaTrue          thrpt    5    93106.945 ±  1051.062  ops/s
-GeoJSONBenchmarks.equalShapelessTrue         thrpt    5   266633.522 ±  4972.167  ops/s
-GeoJSONBenchmarks.equalManualTrue            thrpt    5   599219.169 ±  8331.308  ops/s
-
-GoogleMapsAPIBenchmarks.equalScalazTrue      thrpt    5    35442.577 ±   281.597  ops/s
-GoogleMapsAPIBenchmarks.equalMagnoliaTrue    thrpt    5    91016.557 ±   688.308  ops/s
-GoogleMapsAPIBenchmarks.equalShapelessTrue   thrpt    5   107245.505 ±   468.427  ops/s
-GoogleMapsAPIBenchmarks.equalManualTrue      thrpt    5   302247.760 ±  1927.858  ops/s
-
-TwitterAPIBenchmarks.equalScalazTrue         thrpt    5    99066.013 ±  1125.422  ops/s
-TwitterAPIBenchmarks.equalMagnoliaTrue       thrpt    5   236289.706 ±  3182.664  ops/s
-TwitterAPIBenchmarks.equalShapelessTrue      thrpt    5   251578.931 ±  2430.738  ops/s
-TwitterAPIBenchmarks.equalManualTrue         thrpt    5   865845.158 ±  6339.379  ops/s
-#+END_SRC
-
-As expected, the manual instances are far ahead of the crowd, with Shapeless
-mostly leading the automatic derivations. =scalaz-deriving= makes a great effort
-for GeoJSON but falls far behind in both the Google Maps and Twitter tests. The
-=False= tests are more of the same:
-
-#+BEGIN_SRC scala
-> jsonformat/jmh:run -i 5 -wi 5 -f1 -t1 -w1 -r1 .*equal*
-Benchmark                                     Mode  Cnt        Score       Error  Units
-
-GeoJSONBenchmarks.equalScalazFalse           thrpt    5    89552.875 ±   821.791  ops/s
-GeoJSONBenchmarks.equalMagnoliaFalse         thrpt    5    86044.021 ±  7790.350  ops/s
-GeoJSONBenchmarks.equalShapelessFalse        thrpt    5   262979.062 ±  3310.750  ops/s
-GeoJSONBenchmarks.equalManualFalse           thrpt    5   599989.203 ± 23727.672  ops/s
-
-GoogleMapsAPIBenchmarks.equalScalazFalse     thrpt    5    35970.818 ±   288.609  ops/s
-GoogleMapsAPIBenchmarks.equalMagnoliaFalse   thrpt    5    82381.975 ±   625.407  ops/s
-GoogleMapsAPIBenchmarks.equalShapelessFalse  thrpt    5   110721.122 ±   579.331  ops/s
-GoogleMapsAPIBenchmarks.equalManualFalse     thrpt    5   303588.815 ±  2562.747  ops/s
-
-TwitterAPIBenchmarks.equalScalazFalse        thrpt    5   193930.568 ±  1176.421  ops/s
-TwitterAPIBenchmarks.equalMagnoliaFalse      thrpt    5   429764.654 ± 11944.057  ops/s
-TwitterAPIBenchmarks.equalShapelessFalse     thrpt    5   494510.588 ±  1455.647  ops/s
-TwitterAPIBenchmarks.equalManualFalse        thrpt    5  1631964.531 ± 13110.291  ops/s
-#+END_SRC
-
-The runtime performance of =scalaz-deriving=, Magnolia and Shapeless is usually
+The runtime performance of Magnolia and Shapeless is usually
 good enough. We should be realistic: we are not writing applications that need to
 be able to encode more than 130,000 values to JSON, per second, on a single
 core, on the JVM. If that is a problem, look into C++.
@@ -11690,15 +10672,12 @@ if it is, there is the manually written escape hatch, which is more powerful and
 therefore more dangerous: it is easy to introduce typos, bugs, and even
 performance regressions by accident when writing a manual instance.
 
-In conclusion: hokey derivations and ancient macros are no match for a good hand
-written instance at your side, kid.
-
 #+BEGIN_ASIDE
 We could spend a lifetime with the [[https://github.com/jvm-profiling-tools/async-profiler][=async-profiler=]] investigating CPU and object
 allocation flame graphs to make any of these implementations faster. For
 example, there are some optimisations in the actual =jsonformat= codebase not
 reproduced here, such as a more optimised =JsObject= field lookup, and inclusion
-of =.xmap=, =.map= and =.contramap= on the relevant typeclasses, but it is fair
+of =.imap=, =.map= and =.contramap= on the relevant typeclasses, but it is fair
 to say that the codebase primarily focuses on readability over optimisation and
 still achieves incredible performance.
 #+END_ASIDE
@@ -11708,24 +10687,32 @@ still achieves incredible performance.
 When deciding on a technology to use for typeclass derivation, this feature
 chart may help:
 
-| Feature        | Scalaz | Magnolia | Shapeless    | Manual       |
-|----------------+--------+----------+--------------+--------------|
-| =@deriving=    | yes    | yes      | yes          |              |
-| Laws           | yes    |          |              |              |
-| Fast compiles  | yes    | yes      |              | yes          |
-| Field names    |        | yes      | yes          |              |
-| Annotations    |        | yes      | partially    |              |
-| Default values |        | yes      | with caveats |              |
-| Complicated    |        |          | painfully so |              |
-| Performance    |        |          |              | hold my beer |
+| Feature        | Cats | Magnolia | Shapeless    | Manual |
+|----------------+------+----------+--------------+--------|
+| Laws           | yes  |          |              |        |
+| Fast compiles  | yes  | yes      |              | yes    |
+| Field names    |      | yes      | yes          |        |
+| Annotations    |      | yes      | partially    |        |
+| Default values |      | yes      | with caveats |        |
+| Complicated    |      |          | yes          |        |
+| Performance    |      |          |              | yes    |
 
-Prefer =scalaz-deriving= if possible, using Magnolia for encoders / decoders or
-if performance is a larger concern, escalating to Shapeless for complicated
-derivations only if compilation times are not a concern.
+Prefer Cats typeclasses of typeclasses if possible, using Magnolia for encoders
+/ decoders or if performance is a larger concern, escalating to Shapeless for
+complicated derivations only if compilation times are not a concern.
+
+There is no need to write derivation rules for Cats core typeclasses: the
+[[https://github.com/typelevel/kittens][Typelevel Kittens]] project provides Shapeless-based derivation rules and
+[[https://github.com/spotify/magnolify][Magnolify]] has Magnolia based rules.
 
 Manual instances are always an escape hatch for special cases and to achieve the
 ultimate performance. Avoid introducing typo bugs with manual instances by using
 a code generation tool.
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 ** Wiring up the Application
 
@@ -12220,8 +11207,8 @@ object Main extends SafeApp {
     if (args.contains("--machines")) auth("machines")
     else agents(BearerToken("<invalid>", Epoch(0)))
   }.attempt[Void].map {
-    case \/-(_)   => ExitStatus.ExitNow(0)
-    case -\/(err) => ExitStatus.ExitNow(1)
+    case Right(_)   => ExitStatus.ExitNow(0)
+    case Left(err) => ExitStatus.ExitNow(1)
   }
 }
 #+END_SRC
@@ -12362,9 +11349,9 @@ final class BlazeJsonClient[F[_]] private (H: Client[Task])(
   I: LiftIO[F, Throwable]
 ) extends JsonClient[F] {
   ...
-  def handler[A: JsDecoder](resp: http4s.Response[Task]): Task[Error \/ A] = {
+  def handler[A: JsDecoder](resp: http4s.Response[Task]): Task[Either[Error, A]] = {
     if (!resp.status.isSuccess)
-      Task.now(JsonClient.ServerError(resp.status.code).left)
+      Task.now(Left(JsonClient.ServerError(resp.status.code)))
     else
       for {
         text <- resp.body.through(fs2.text.utf8Decode).compile.foldMonoid

@@ -3897,8 +3897,8 @@ parallel functions and then map over their combined output:
 ~~~~~~~~
   @typeclass trait Apply[F[_]] extends Functor[F] with Semigroupal[F] {
     ...
-    def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
-    def map3[A,B,C,D](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
+    def map2[A,B,Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
+    def map3[A,B,C,Z](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
     ...
     def map22[...]
 ~~~~~~~~
@@ -6710,7 +6710,7 @@ the `Drone` algebra, recall defined as
 ~~~~~~~~
 
 What we want is for our AST to be a combination of the `Machines` and `Drone`
-ASTs. We studied `EitherK` in Chapter 6, a higher kinded disjunction:
+ASTs. We studied `EitherK` in Chapter 6, a higher kinded `Either`:
 
 {lang="text"}
 ~~~~~~~~
@@ -7788,5 +7788,2182 @@ mocks for database-like algebras.
 6.  `IO` gives us the ability to implement algebras as effects on the world.
 7.  `IO` can perform effects in parallel and is a high performance backbone for any application.
 8.  Prefer `Effect`,  `Parallel`, and related typeclasses, to using `IO` directly.
+
+
+# Typeclass Derivation
+
+Typeclasses provide polymorphic functionality to our applications. But to use a
+typeclass we need instances for our business domain objects.
+
+The creation of a typeclass instance from existing instances is known as
+*typeclass derivation* and is the topic of this chapter.
+
+There are four approaches to typeclass derivation:
+
+1.  Manual instances for every domain object. This is infeasible for real world
+    applications as it results in hundreds of lines of boilerplate for every line
+    of a `case class`. It is useful only for educational purposes and adhoc
+    performance optimisations.
+
+2.  Abstract over the typeclass by an existing Cats typeclass.
+
+3.  Macros. However, writing a macro for each typeclass requires an advanced and
+    experienced developer. Fortunately, Jon Pretty's [Magnolia](https://github.com/propensive/magnolia) library abstracts
+    over hand-rolled macros with a simple API, centralising the complex
+    interaction with the compiler.
+
+4.  Write a generic program using the [Shapeless](https://github.com/milessabin/shapeless/) library. The `implicit` mechanism
+    is a language within the Scala language and can be used to write programs at
+    the type level.
+
+In this chapter we will study increasingly complex typeclasses and their
+derivations. We will begin with typeclasses of typeclasses as the most principled
+mechanism, repeating some lessons from Chapter 5 "Cats Typeclasses", then
+Magnolia (the easiest to use), finishing with Shapeless (the most powerful) for
+typeclasses with complex derivation logic.
+
+
+## Running Examples
+
+This chapter will show how to define derivations for five specific typeclasses.
+Each example exhibits a feature that can be generalised:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Equal[A]  {
+    // type parameter is in contravariant (parameter) position
+    @op("===") def eqv(a1: A, a2: A): Boolean
+  }
+  
+  // for requesting default values of a type when testing
+  @typeclass trait Default[A] {
+    // type parameter is in covariant (return) position
+    def default: Either[String, A]
+  }
+  
+  @typeclass trait Semigroup[A] {
+    // type parameter is in both covariant and contravariant position (invariant)
+    @op("|+|") def combine(x: A, y: A): A
+  }
+  
+  @typeclass trait JsEncoder[T] {
+    // type parameter is in contravariant position and needs access to field names
+    def toJson(t: T): JsValue
+  }
+  
+  @typeclass trait JsDecoder[T] {
+    // type parameter is in covariant position and needs access to field names
+    def fromJson(j: JsValue): Either[String, T]
+  }
+~~~~~~~~
+
+A> There is a school of thought that says serialisation formats, such as JSON and
+A> XML, should **not** have typeclass encoders and decoders, because it can lead to
+A> typeclass decoherence (i.e. more than one encoder or decoder may exist for the
+A> same type). The alternative is to use algebras and avoid using the `implicit`
+A> language feature entirely.
+A> 
+A> Although it is possible to apply the techniques in this chapter to either
+A> typeclass or algebra derivation, the latter involves a **lot** more boilerplate.
+A> We therefore consciously choose to restrict our study to encoders and decoders
+A> that are coherent. As we will see later in this chapter, use-site automatic
+A> derivation with Magnolia and Shapeless, combined with limitations of the Scala
+A> compiler's implicit search, commonly leads to typeclass decoherence.
+
+
+## Typeclasses of Typeclasses
+
+Before we proceed, here is a quick recap of the core Cats typeclasses, focussed
+on just the typeclasses that are relevant for this chapter:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Invariant[F[_]] {
+    def imap[A, B](fa: F[A], f: A => B, g: B => A): F[B]
+  }
+  
+  @typeclass trait Contravariant[F[_]] extends Invariant[F] {
+    def contramap[A, B](fa: F[A])(f: B => A): F[B]
+  }
+  
+  @typeclass trait ContravariantMonoidal[F[_]] extends Contravariant[F] {
+    def trivial[A]: F[A] = contramap(unit)(_ => ())
+  
+    def contramap2[A, B, Z](f0: F[A], f1: F[B])(f: Z => (A, B)): F[Z]
+    def contramap3[A, B, C, Z](f0: F[A], f1: F[B], f2: F[C])(f: Z => (A, B, C)): F[Z]
+    ...
+    def contramap22[...] = ...
+  }
+  
+  @typeclass trait Functor[F[_]] extends Invariant[F] {
+    def map[A, B](fa: F[A])(f: A => B): F[B]
+  }
+  
+  @typeclass trait Apply[F[_]] extends Functor[F] {
+    def map2[A,B,Z](fa: F[A], fb: F[B])(f: (A, B) => Z): F[Z] = ...
+    def map3[A,B,C,Z](fa: F[A], fb: F[B], fc: F[C])(f: (A,B,C) => Z): F[Z] = ...
+    ...
+    def map22[...]
+  }
+  
+  @typeclass trait Monad[F[_]] extends Apply[F] {
+    def flatMap[A, B](fa: F[A])(f: A => F[B]): F[B]
+  }
+  
+  @typeclass trait MonadError[F[_], E] extends Monad[F] {
+    def raiseError[A](e: E): F[A]
+    def fromEither[A](x: Either[E, A]): F[A] = ...
+  }
+~~~~~~~~
+
+
+### Don't Repeat Yourself
+
+The simplest way to derive a typeclass is to reuse one that already exists.
+
+The `Eq` typeclass has an instance of `Contravariant[Eq]`, providing
+`.contramap`:
+
+{lang="text"}
+~~~~~~~~
+  object Eq {
+    implicit val contravariant = new Contravariant[Eq] {
+      def contramap[A, B](fa: Eq[A])(f: B => A): Eq[B] =
+        (b1, b2) => fa.eqv(f(b1), f(b2))
+    }
+    ...
+  }
+~~~~~~~~
+
+As users of `Eq`, we can use `.contramap` for our single parameter data
+types. Recall that typeclass instances go on the data type companions to be in
+their implicit scope:
+
+{lang="text"}
+~~~~~~~~
+  final case class Foo(s: String)
+  object Foo {
+    implicit val equal: Eq[Foo] = Eq[String].contramap(_.s)
+  }
+  
+  scala> Foo("hello") === Foo("world")
+  false
+~~~~~~~~
+
+However, not all typeclasses can have an instance of `Contravariant`. In
+particular, typeclasses with type parameters in covariant position may have a
+`Functor` instead:
+
+{lang="text"}
+~~~~~~~~
+  object Default {
+    def instance[A](d: => Either[String, A]) = new Default[A] { def default = d }
+    implicit val string: Default[String] = instance(Right(""))
+  
+    implicit val functor: Functor[Default] = new Functor[Default] {
+      def map[A, B](fa: Default[A])(f: A => B): Default[B] = instance(fa.default.map(f))
+    }
+    ...
+  }
+~~~~~~~~
+
+We can now derive a `Default[Foo]`
+
+{lang="text"}
+~~~~~~~~
+  object Foo {
+    implicit val default: Default[Foo] = Default[String].map(Foo(_))
+    ...
+  }
+~~~~~~~~
+
+If a typeclass has parameters in both covariant and contravariant position, as
+is the case with `Semigroup`, it may provide an `Invariant`
+
+{lang="text"}
+~~~~~~~~
+  object Semigroup {
+    implicit val invariant = new Invariant[Semigroup] {
+      def imap[A, B](ma: Semigroup[A], f: A => B, g: B => A) = new Semigroup[B] {
+        def combine(x: B, y: B): B = f(ma.combine(g(x), g(y)))
+      }
+    }
+    ...
+  }
+~~~~~~~~
+
+and we can call `.imap`
+
+{lang="text"}
+~~~~~~~~
+  object Foo {
+    implicit val semigroup: Semigroup[Foo] = Semigroup[String].imap(Foo(_), _.s)
+    ...
+  }
+~~~~~~~~
+
+Generally, it is simpler to just use `.imap` instead of `.map` or `.contramap`:
+
+{lang="text"}
+~~~~~~~~
+  final case class Foo(s: String)
+  object Foo {
+    implicit val equal: Eq[Foo]            = Eq[String].imap(Foo(_), _.s)
+    implicit val default: Default[Foo]     = Default[String].imap(Foo(_), _.s)
+    implicit val semigroup: Semigroup[Foo] = Semigroup[String].imap(Foo(_), _.s)
+  }
+~~~~~~~~
+
+
+### `MonadError`
+
+Typically things that *write* from a polymorphic value have a `Contravariant`,
+and things that *read* into a polymorphic value have a `Functor`. However, it is
+very much expected that reading can fail. For example, if we have a default
+`String` it does not mean that we can simply derive a default `String Refined
+NonEmpty` from it
+
+We start by introducing a convenience function that we will use a lot
+
+{lang="text"}
+~~~~~~~~
+  import eu.timepit.refined.refineV
+  import eu.timepit.refined.api._
+  import eu.timepit.refined.collection._
+  
+  implicit val nes: Default[String Refined NonEmpty] =
+    Default[String].map(refineV[NonEmpty](_))
+~~~~~~~~
+
+fails to compile with
+
+{lang="text"}
+~~~~~~~~
+  [error] default.scala:41:32: polymorphic expression cannot be instantiated to expected type;
+  [error]  found   : Either[String, String Refined NonEmpty]
+  [error]  required: String Refined NonEmpty
+  [error]     Default[String].map(refineV[NonEmpty](_))
+  [error]                                          ^
+~~~~~~~~
+
+Recall from Chapter 4.1 that `refineV` returns an `Either`, as the compiler has
+reminded us.
+
+As the typeclass author of `Default`, we can do better than `Functor` and
+provide a `MonadError[Default, String]`:
+
+{lang="text"}
+~~~~~~~~
+  implicit val monad = new MonadError[Default, String] {
+    def pure[A](a: A): Default[A] = instance(Right(a))
+    def flatMap[A, B](fa: Default[A])(f: A => Default[B]): Default[B] =
+      instance((fa.flatMap(f)).default)
+    def handleErrorWith[A](fa: Default[A])(f: String => Default[A]): Default[A] =
+      instance(fa.default.handleErrorWith(e => f(e).default))
+    def raiseError[A](e: String): Default[A] =
+      instance(Left(e))
+    ...
+  }
+~~~~~~~~
+
+If we introduce the general purpose helper function `.emap`
+
+{lang="text"}
+~~~~~~~~
+  implicit class MonadErrorOps[F[_]: MonadError, E](fa: F[A]) {
+    def emap[B](f: A => Either[E, B]): F[B] =
+      fa.flatMap(a => fromEither(f(a)))
+  }
+~~~~~~~~
+
+we have access to `.emap` syntax and can derive our refined type
+
+{lang="text"}
+~~~~~~~~
+  implicit val nes: Default[String Refined NonEmpty] =
+    Default[String].emap(refineV[NonEmpty](_))
+~~~~~~~~
+
+In fact, we can provide a derivation rule for all refined types
+
+{lang="text"}
+~~~~~~~~
+  implicit def refined[A: Default, P](
+    implicit V: Validate[A, P]
+  ): Default[A Refined P] = Default[A].emap(refineV[P](_))
+~~~~~~~~
+
+where `Validate` is from the refined library and is required by `refineV`.
+
+A> The `refined-cats` extension to `refined` provides support for automatically
+A> deriving all typeclasses for refined types with the following import
+A> 
+A> {lang="text"}
+A> ~~~~~~~~
+A>   import eu.timepit.refined.cats._
+A> ~~~~~~~~
+A> 
+A> if there is a `Contravariant` or `MonadError[?, String]` in the implicit scope.
+
+Similarly we can use `.emap` to derive an `Int` decoder from a `Long`, with
+protection around the non-total `.toInt` stdlib method.
+
+{lang="text"}
+~~~~~~~~
+  implicit val long: Default[Long] = instance(Right(0L))
+  implicit val int: Default[Int] = Default[Long].emap {
+    case n if (Int.MinValue <= n && n <= Int.MaxValue) => Right(n.toInt)
+    case big => Left(s"$big does not fit into 32 bits")
+  }
+~~~~~~~~
+
+As authors of the `Default` typeclass, we might want to reconsider our API
+design so that it can never fail, e.g. with the following type signature
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait Default[A] {
+    def default: A
+  }
+~~~~~~~~
+
+We would not be able to define a `MonadError`, forcing us to provide instances
+that always succeed. This will result in more boilerplate but gains compiletime
+safety. However, we will continue with `Either[String, A]` as the return type as
+it is a more general example.
+
+
+### `ContravariantMonoidal` and `Applicative`
+
+To derive the `Eq` for our case class with two parameters, we reused the
+instance that Cats provides for tuples. But where did the tuple instance come
+from?
+
+A more specific typeclass than `Contravariant` is `ContravariantMonoidal`. `Eq`
+has an instance:
+
+{lang="text"}
+~~~~~~~~
+  implicit val contramonoidal = new ContravariantMonoidal[Eq] {
+    ...
+    def contramap2[A1, A2, Z](a1: Eq[A1], a2: Eq[A2])(
+      f: Z => (A1, A2)
+    ): Eq[Z] = { (z1, z2) =>
+      val (s1, s2) = f(z1)
+      val (t1, t2) = f(z2)
+      a1.eqv(s1, t1) && a2.eqv(s2, t2)
+    }
+    def trivial[A]: Eq[A] = (_, _) => true
+  }
+~~~~~~~~
+
+And from `contramap2`, `ContravariantMonoidal` is able to build up derivations
+all the way to `contramap22` (and the `.contramapN` helper for tuples). We can
+call these methods directly for our data types:
+
+{lang="text"}
+~~~~~~~~
+  final case class Bar(s: String, i: Int)
+  object Bar {
+    implicit val equal: Eq[Bar] =
+      (Eq[String], Eq[Int]).contramapN(b => (b.s, b.i))
+  }
+~~~~~~~~
+
+The equivalent for type parameters in covariant position is `Applicative`:
+
+{lang="text"}
+~~~~~~~~
+  object Bar {
+    ...
+    implicit val default: Default[Bar] =
+      (Default[String], Default[Int]).mapN(Bar(_, _))
+  }
+~~~~~~~~
+
+But we must be careful that we do not break the typeclass laws when we implement
+`ContravariantMonoidal` or `Applicative`. In particular, it is easy to break the
+*law of composition* which says that the following two codepaths must yield
+exactly the same output
+
+-   `contramap2(contramap2(a1, a2)(dupe), a3)(dupe)`
+-   `contramap2(a1, contramap2(a2, a3)(dupe))(dupe)`
+-   for any `dupe: A => (A, A)`
+
+with similar laws for `Applicative`.
+
+Consider `JsEncoder` and a proposed instance of `ContravariantMonoidal`
+
+{lang="text"}
+~~~~~~~~
+  new ContravariantMonoidal[JsEncoder] {
+    ...
+    def contramap2[A, B, C](fa: JsEncoder[A], fb: JsEncoder[B])(
+      f: C => (A, B)
+    ): JsEncoder[C] = { c =>
+      val (a, b) = f(c)
+      JsArray(List(fa.toJson(a), fb.toJson(b)))
+    }
+  
+    def trivial[A]: JsEncoder[A] = _ => JsNull
+  }
+~~~~~~~~
+
+On one side of the composition laws, for a `String` input, we get
+
+{lang="text"}
+~~~~~~~~
+  JsArray([JsArray([JsString(hello),JsString(hello)]),JsString(hello)])
+~~~~~~~~
+
+and on the other
+
+{lang="text"}
+~~~~~~~~
+  JsArray([JsString(hello),JsArray([JsString(hello),JsString(hello)])])
+~~~~~~~~
+
+which are different. We could experiment with variations of the `.contramap2`
+implementation, but it will never satisfy the laws for all inputs.
+
+We therefore cannot provide a `ContravariantMonoidal[JsEncoder]` because it
+would break the mathematical laws and invalidates all the assumptions that users
+of `ContravariantMonoidal` rely upon.
+
+On the other hand, a similar `JsDecoder` test meets the `Applicative`
+composition laws so we can be reasonably confident that our `MonadError` is
+lawful.
+
+One way of generating a wide variety of test data is to use the [scalacheck](https://github.com/rickynils/scalacheck)
+library, which provides an `Arbitrary` typeclass that integrates with most
+testing frameworks to repeat a test with randomly generated data.
+
+The `jsonformat` ADT can provide an `Arbitrary[JsValue]` allowing us to make use
+of Scalatest's `.forAll` feature:
+
+{lang="text"}
+~~~~~~~~
+  forAll(SizeRange(10))((j: JsValue) => composeTest(j))
+~~~~~~~~
+
+This test gives us even more confidence that our typeclass meets the
+`Applicative` composition laws. By checking all the laws on
+`ContravariantMonoidal` and `MonadError` we also get **a lot** of smoke tests for
+free.
+
+A> We must restrict `forAll` to have a `SizeRange` of `10`, which limits both
+A> `JsObject` and `JsArray` to a maximum size of 10 elements. This avoids stack
+A> overflows as larger numbers can generate gigantic JSON documents.
+
+
+## Magnolia
+
+The Magnolia macro library provides a clean API for writing typeclass
+derivations. It is installed with the following `build.sbt` entry
+
+{lang="text"}
+~~~~~~~~
+  libraryDependencies += "com.propensive" %% "magnolia" % "0.14.4"
+~~~~~~~~
+
+A typeclass author implements the following members:
+
+{lang="text"}
+~~~~~~~~
+  import magnolia._
+  
+  object MyDerivation {
+    type Typeclass[A]
+  
+    def combine[A](ctx: CaseClass[Typeclass, A]): Typeclass[A]
+    def dispatch[A](ctx: SealedTrait[Typeclass, A]): Typeclass[A]
+  
+    def gen[A]: Typeclass[A] = macro Magnolia.gen[A]
+  }
+~~~~~~~~
+
+The Magnolia API is:
+
+{lang="text"}
+~~~~~~~~
+  class CaseClass[TC[_], A] {
+    def typeName: TypeName
+    def construct[B](f: Param[TC, A] => B): A
+    def constructMonadic[F[_]: Monadic, B](f: Param[TC, A] => F[B]): F[A]
+    def parameters: Seq[Param[TC, A]]
+    def annotations: Seq[Any]
+  }
+  
+  class SealedTrait[TC[_], A] {
+    def typeName: TypeName
+    def subtypes: Seq[Subtype[TC, A]]
+    def dispatch[B](value: A)(handle: Subtype[TC, A] => B): B
+    def annotations: Seq[Any]
+  }
+~~~~~~~~
+
+with helpers
+
+{lang="text"}
+~~~~~~~~
+  final case class TypeName(short: String, full: String)
+  
+  class Param[TC[_], A] {
+    type PType
+    def label: String
+    def index: Int
+    def typeclass: TC[PType]
+    def dereference(param: A): PType
+    def default: Option[PType]
+    def annotations: Seq[Any]
+  }
+  
+  class Subtype[TC[_], A] {
+    type SType <: A
+    def typeName: TypeName
+    def index: Int
+    def typeclass: TC[SType]
+    def cast(a: A): SType
+    def annotations: Seq[Any]
+  }
+~~~~~~~~
+
+The `Monadic` typeclass, used in `constructMonadic`, is automatically generated
+if our data type has a `.map` and `.flatMap` method when we `import mercator._`
+
+It does not make sense to use Magnolia for typeclasses that can be abstracted by
+`ContravariantMonoidal`, `Decidable`, `Applicative` or `Alt`, since those
+abstractions provide a lot of extra structure and tests for free. However,
+Magnolia offers features that Cats cannot provide: access to field names, type
+names, annotations and default values.
+
+
+### Example: JSON
+
+We have some design choices to make with regards to JSON serialisation:
+
+1.  Should we include fields with `null` values?
+2.  Should decoding treat missing vs `null` differently?
+3.  How do we encode the name of a coproduct?
+4.  How do we deal with coproducts that are not `JsObject`?
+
+We choose sensible defaults
+
+-   do not include fields if the value is a `JsNull`.
+-   handle missing fields the same as `null` values.
+-   use a special field `"type"` to disambiguate coproducts using the type name.
+-   put primitive values into a special field `"xvalue"`.
+
+and let the users attach an annotation to coproducts and product fields to
+customise their formats:
+
+{lang="text"}
+~~~~~~~~
+  sealed class json extends Annotation
+  object json {
+    final case class nulls()          extends json
+    final case class field(f: String) extends json
+    final case class hint(f: String)  extends json
+  }
+~~~~~~~~
+
+A> Magnolia is not limited to one annotation family. This encoding is so that we
+A> can do a like-for-like comparison with Shapeless in the next section.
+
+For example
+
+{lang="text"}
+~~~~~~~~
+  @json.field("TYPE")
+  sealed abstract class Cost
+  final case class Time(s: String) extends Cost
+  final case class Money(@json.field("integer") i: Int) extends Cost
+~~~~~~~~
+
+Start with a `JsEncoder` that handles only our sensible defaults:
+
+{lang="text"}
+~~~~~~~~
+  object JsMagnoliaEncoder {
+    type Typeclass[A] = JsEncoder[A]
+  
+    def combine[A](ctx: CaseClass[JsEncoder, A]): JsEncoder[A] = { a =>
+      val empty: List[(String, JsValue)] = Nil
+      val fields = ctx.parameters.foldRight(empty) { (p, acc) =>
+        p.typeclass.toJson(p.dereference(a)) match {
+          case JsNull => acc
+          case value  => (p.label -> value) :: acc
+        }
+      }
+      JsObject(fields)
+    }
+  
+    def dispatch[A](ctx: SealedTrait[JsEncoder, A]): JsEncoder[A] = a =>
+      ctx.dispatch(a) { sub =>
+        val hint = "type" -> JsString(sub.typeName.short)
+        sub.typeclass.toJson(sub.cast(a)) match {
+          case JsObject(fields) => JsObject(hint :: fields)
+          case other            => JsObject(List(hint, "xvalue" -> other))
+        }
+      }
+  
+    def gen[A]: JsEncoder[A] = macro Magnolia.gen[A]
+  }
+~~~~~~~~
+
+We can see how the Magnolia API makes it easy to access field names and
+typeclasses for each parameter.
+
+Now add support for annotations to handle user preferences. To avoid looking up
+the annotations on every encoding, we will cache them in an array. Although field
+access to an array is non-total, we are guaranteed that the indices will always
+align. Performance is usually the victim in the trade-off between specialisation
+and generalisation.
+
+{lang="text"}
+~~~~~~~~
+  object JsMagnoliaEncoder {
+    type Typeclass[A] = JsEncoder[A]
+  
+    def combine[A](ctx: CaseClass[JsEncoder, A]): JsEncoder[A] =
+      new JsEncoder[A] {
+        private val anns = ctx.parameters.map { p =>
+          val nulls = p.annotations.collectFirst {
+            case json.nulls() => true
+          }.getOrElse(false)
+          val field = p.annotations.collectFirst {
+            case json.field(name) => name
+          }.getOrElse(p.label)
+          (nulls, field)
+        }.toArray
+  
+        def toJson(a: A): JsValue = {
+          val empty: List[(String, JsValue)] = Nil
+          val fields = ctx.parameters.foldRight(empty) { (p, acc) =>
+            val (nulls, field) = anns(p.index)
+            p.typeclass.toJson(p.dereference(a)) match {
+              case JsNull if !nulls => acc
+              case value            => (field -> value) :: acc
+            }
+          }
+          JsObject(fields)
+        }
+      }
+  
+    def dispatch[A](ctx: SealedTrait[JsEncoder, A]): JsEncoder[A] =
+      new JsEncoder[A] {
+        private val field = ctx.annotations.collectFirst {
+          case json.field(name) => name
+        }.getOrElse("type")
+        private val anns = ctx.subtypes.map { s =>
+          val hint = s.annotations.collectFirst {
+            case json.hint(name) => field -> JsString(name)
+          }.getOrElse(field -> JsString(s.typeName.short))
+          val xvalue = s.annotations.collectFirst {
+            case json.field(name) => name
+          }.getOrElse("xvalue")
+          (hint, xvalue)
+        }.toArray
+  
+        def toJson(a: A): JsValue = ctx.dispatch(a) { sub =>
+          val (hint, xvalue) = anns(sub.index)
+          sub.typeclass.toJson(sub.cast(a)) match {
+            case JsObject(fields) => JsObject(hint :: fields)
+            case other            => JsObject(hint :: (xvalue -> other) :: Nil)
+          }
+        }
+      }
+  
+    def gen[A]: JsEncoder[A] = macro Magnolia.gen[A]
+  }
+~~~~~~~~
+
+For the decoder we use `.constructMonadic` which has a type signature similar to
+`.traverse`
+
+{lang="text"}
+~~~~~~~~
+  object JsMagnoliaDecoder {
+    type Typeclass[A] = JsDecoder[A]
+  
+    def combine[A](ctx: CaseClass[JsDecoder, A]): JsDecoder[A] = {
+      case obj @ JsObject(_) =>
+        ctx.constructMonadic(
+          p => p.typeclass.fromJson(obj.get(p.label).getOrElse(JsNull))
+        )
+      case other => fail("JsObject", other)
+    }
+  
+    def dispatch[A](ctx: SealedTrait[JsDecoder, A]): JsDecoder[A] = {
+      case obj @ JsObject(_) =>
+        obj.get("type") match {
+          case Right(JsString(hint)) =>
+            ctx.subtypes.find(_.typeName.short == hint) match {
+              case None => fail(s"a valid '$hint'", obj)
+              case Some(sub) =>
+                val value = obj.get("xvalue").getOrElse(obj)
+                sub.typeclass.fromJson(value)
+            }
+          case _ => fail("JsObject with type", obj)
+        }
+      case other => fail("JsObject", other)
+    }
+  
+    def gen[A]: JsDecoder[A] = macro Magnolia.gen[A]
+  }
+~~~~~~~~
+
+Again, adding support for user preferences and default field values, along with
+some optimisations:
+
+{lang="text"}
+~~~~~~~~
+  object JsMagnoliaDecoder {
+    type Typeclass[A] = JsDecoder[A]
+  
+    def combine[A](ctx: CaseClass[JsDecoder, A]): JsDecoder[A] =
+      new JsDecoder[A] {
+        private val nulls = ctx.parameters.map { p =>
+          p.annotations.collectFirst {
+            case json.nulls() => true
+          }.getOrElse(false)
+        }.toArray
+  
+        private val fieldnames = ctx.parameters.map { p =>
+          p.annotations.collectFirst {
+            case json.field(name) => name
+          }.getOrElse(p.label)
+        }.toArray
+  
+        def fromJson(j: JsValue): Either[String, A] = j match {
+          case obj @ JsObject(_) =>
+            import mercator._
+            val lookup = obj.fields.toMap
+            ctx.constructMonadic { p =>
+              val field = fieldnames(p.index)
+              lookup
+                .get(field)
+                .into {
+                  case Maybe.Just(value) => p.typeclass.fromJson(value)
+                  case _ =>
+                    p.default match {
+                      case Some(default) => Right(default)
+                      case None if nulls(p.index) =>
+                        Left(s"missing field '$field'")
+                      case None => p.typeclass.fromJson(JsNull)
+                    }
+                }
+            }
+          case other => fail("JsObject", other)
+        }
+      }
+  
+    def dispatch[A](ctx: SealedTrait[JsDecoder, A]): JsDecoder[A] =
+      new JsDecoder[A] {
+        private val subtype = ctx.subtypes.map { s =>
+          s.annotations.collectFirst {
+            case json.hint(name) => name
+          }.getOrElse(s.typeName.short) -> s
+        }.toMap
+        private val typehint = ctx.annotations.collectFirst {
+          case json.field(name) => name
+        }.getOrElse("type")
+        private val xvalues = ctx.subtypes.map { sub =>
+          sub.annotations.collectFirst {
+            case json.field(name) => name
+          }.getOrElse("xvalue")
+        }.toArray
+  
+        def fromJson(j: JsValue): Either[String, A] = j match {
+          case obj @ JsObject(_) =>
+            obj.get(typehint) match {
+              case Right(JsString(h)) =>
+                subtype.get(h) match {
+                  case None => fail(s"a valid '$h'", obj)
+                  case Some(sub) =>
+                    val xvalue = xvalues(sub.index)
+                    val value  = obj.get(xvalue).getOrElse(obj)
+                    sub.typeclass.fromJson(value)
+                }
+              case _ => fail(s"JsObject with '$typehint' field", obj)
+            }
+          case other => fail("JsObject", other)
+        }
+      }
+  
+    def gen[A]: JsDecoder[A] = macro Magnolia.gen[A]
+  }
+~~~~~~~~
+
+We call the `JsMagnoliaEncoder.gen` or `JsMagnoliaDecoder.gen` method from the
+companion of our data types. For example, the Google Maps API
+
+{lang="text"}
+~~~~~~~~
+  final case class Value(text: String, value: Int)
+  final case class Elements(distance: Value, duration: Value, status: String)
+  final case class Rows(elements: List[Elements])
+  final case class DistanceMatrix(
+    destination_addresses: List[String],
+    origin_addresses: List[String],
+    rows: List[Rows],
+    status: String
+  )
+  
+  object Value {
+    implicit val encoder: JsEncoder[Value] = JsMagnoliaEncoder.gen
+    implicit val decoder: JsDecoder[Value] = JsMagnoliaDecoder.gen
+  }
+  object Elements {
+    implicit val encoder: JsEncoder[Elements] = JsMagnoliaEncoder.gen
+    implicit val decoder: JsDecoder[Elements] = JsMagnoliaDecoder.gen
+  }
+  object Rows {
+    implicit val encoder: JsEncoder[Rows] = JsMagnoliaEncoder.gen
+    implicit val decoder: JsDecoder[Rows] = JsMagnoliaDecoder.gen
+  }
+  object DistanceMatrix {
+    implicit val encoder: JsEncoder[DistanceMatrix] = JsMagnoliaEncoder.gen
+    implicit val decoder: JsDecoder[DistanceMatrix] = JsMagnoliaDecoder.gen
+  }
+~~~~~~~~
+
+
+### Fully Automatic Derivation
+
+Generating `implicit` instances on the companion of the data type is
+historically known as *semi-auto* derivation, in contrast to *full-auto* which
+is when the `.gen` is made `implicit`
+
+{lang="text"}
+~~~~~~~~
+  object JsMagnoliaEncoder {
+    ...
+    implicit def gen[A]: JsEncoder[A] = macro Magnolia.gen[A]
+  }
+  object JsMagnoliaDecoder {
+    ...
+    implicit def gen[A]: JsDecoder[A] = macro Magnolia.gen[A]
+  }
+~~~~~~~~
+
+Users can import these methods into their scope and get magical derivation at
+the point of use
+
+{lang="text"}
+~~~~~~~~
+  scala> final case class Value(text: String, value: Int)
+  scala> import JsMagnoliaEncoder.gen
+  scala> Value("hello", 1).toJson
+  res = JsObject([("text","hello"),("value",1)])
+~~~~~~~~
+
+This may sound tempting, as it involves the least amount of typing, but there
+are two caveats:
+
+1.  the macro is invoked at every use site, i.e. every time we call `.toJson`.
+    This slows down compilation and also produces more objects at runtime, which
+    will impact runtime performance.
+2.  unexpected things may be derived.
+
+The first caveat is self evident, but unexpected derivations manifests as
+subtle bugs. Consider what would happen for
+
+{lang="text"}
+~~~~~~~~
+  final case class Foo(s: Option[String])
+  object Foo {
+    implicit val jsencoder: JsEncoder[Foo] = gen
+  }
+~~~~~~~~
+
+if we forgot to provide an implicit derivation for `Option`. We might expect a
+`Foo(Some("hello"))` to look like
+
+{lang="text"}
+~~~~~~~~
+  {
+    "s":"hello"
+  }
+~~~~~~~~
+
+But it would instead be
+
+{lang="text"}
+~~~~~~~~
+  {
+    "s": {
+      "type":"Some",
+      "get":"hello"
+    }
+  }
+~~~~~~~~
+
+because Magnolia derived an `Option` encoder for us.
+
+This is confusing, we would rather have the compiler tell us if we forgot
+something. Full auto is therefore not recommended.
+
+
+## Shapeless
+
+The [Shapeless](https://github.com/milessabin/shapeless/) library is notoriously the most complicated library in Scala. The
+reason why it has such a reputation is because it takes the `implicit` language
+feature to the extreme: creating a kind of *generic programming* language at the
+level of the types.
+
+A> It is not necessary to understand Shapeless to be a Functional Programmer. If
+A> this chapter becomes too much, just skip to the next section.
+
+To install Shapeless, add the following to `build.sbt`
+
+{lang="text"}
+~~~~~~~~
+  libraryDependencies += "com.chuusai" %% "shapeless" % "2.3.3"
+~~~~~~~~
+
+At the core of Shapeless are the `HList` and `Coproduct` data types
+
+{lang="text"}
+~~~~~~~~
+  package shapeless
+  
+  sealed trait HList
+  final case class ::[+H, +T <: HList](head: H, tail: T) extends HList
+  sealed trait NNil extends HList
+  case object HNil extends HNil {
+    def ::[H](h: H): H :: HNil = ::(h, this)
+  }
+  
+  sealed trait Coproduct
+  sealed trait :+:[+H, +T <: Coproduct] extends Coproduct
+  final case class Inl[+H, +T <: Coproduct](head: H) extends :+:[H, T]
+  final case class Inr[+H, +T <: Coproduct](tail: T) extends :+:[H, T]
+  sealed trait CNil extends Coproduct // no implementations
+~~~~~~~~
+
+which are *generic* representations of products and coproducts, respectively.
+The `sealed trait HNil` is for convenience so we never need to type `HNil.type`.
+
+Shapeless has a `Generic` typeclass, which allows us to move between an ADT and
+its generic representation:
+
+{lang="text"}
+~~~~~~~~
+  trait Generic[T] {
+    type Repr
+    def to(t: T): Repr
+    def from(r: Repr): T
+  }
+  object Generic {
+    type Aux[T, R] = Generic[T] { type Repr = R }
+    def apply[T](implicit G: Generic[T]): Aux[T, G.Repr] = G
+    implicit def materialize[T, R]: Aux[T, R] = macro ...
+  }
+~~~~~~~~
+
+Many of the types in Shapeless have a type member (`Repr`) and an `.Aux` type
+alias on their companion that makes the second type visible. This allows us to
+request the `Generic[Foo]` for a type `Foo` without having to provide the
+generic representation, which is generated by a macro.
+
+{lang="text"}
+~~~~~~~~
+  scala> import shapeless._
+  scala> final case class Foo(a: String, b: Long)
+         Generic[Foo].to(Foo("hello", 13L))
+  res: String :: Long :: HNil = hello :: 13 :: HNil
+  
+  scala> Generic[Foo].from("hello" :: 13L :: HNil)
+  res: Foo = Foo(hello,13)
+  
+  scala> sealed abstract class Bar
+         case object Irish extends Bar
+         case object English extends Bar
+  
+  scala> Generic[Bar].to(Irish)
+  res: English.type :+: Irish.type :+: CNil.type = Inl(Irish)
+  
+  scala> Generic[Bar].from(Inl(Irish))
+  res: Bar = Irish
+~~~~~~~~
+
+There is a complementary `LabelledGeneric` that includes the field names
+
+{lang="text"}
+~~~~~~~~
+  scala> import shapeless._, labelled._
+  scala> final case class Foo(a: String, b: Long)
+  
+  scala> LabelledGeneric[Foo].to(Foo("hello", 13L))
+  res: String with KeyTag[Symbol with Tagged[String("a")], String] ::
+       Long   with KeyTag[Symbol with Tagged[String("b")],   Long] ::
+       HNil =
+       hello :: 13 :: HNil
+  
+  scala> sealed abstract class Bar
+         case object Irish extends Bar
+         case object English extends Bar
+  
+  scala> LabelledGeneric[Bar].to(Irish)
+  res: Irish.type   with KeyTag[Symbol with Tagged[String("Irish")],     Irish.type] :+:
+       English.type with KeyTag[Symbol with Tagged[String("English")], English.type] :+:
+       CNil.type =
+       Inl(Irish)
+~~~~~~~~
+
+Note that the **value** of a `LabelledGeneric` representation is the same as the
+`Generic` representation: field names only exist in the type and are erased at
+runtime.
+
+We never need to type `KeyTag` manually, we use the type alias:
+
+{lang="text"}
+~~~~~~~~
+  type FieldType[K, +V] = V with KeyTag[K, V]
+~~~~~~~~
+
+If we want to access the field name from a `FieldType[K, A]`, we ask for
+implicit evidence `Witness.Aux[K]`, which allows us to access the value of `K`
+at runtime.
+
+Superficially, this is all we need to know about Shapeless to be able to derive
+a typeclass. However, things get increasingly complex, so we will proceed with
+increasingly complex examples.
+
+
+### Example: Eq
+
+A typical pattern to follow is to extend the typeclass that we wish to derive,
+and put the Shapeless code on its companion. This gives us an implicit scope
+that the compiler can search without requiring complex imports
+
+{lang="text"}
+~~~~~~~~
+  trait DerivedEq[A] extends Eq[A]
+  object DerivedEq {
+    ...
+  }
+~~~~~~~~
+
+The entry point to a Shapeless derivation is a method, `gen`, requiring two type
+parameters: the `A` that we are deriving and the `R` for its generic
+representation. We then ask for the `Generic.Aux[A, R]`, relating `A` to `R`,
+and an instance of the `Derived` typeclass for the `R`. We begin with this
+signature and simple implementation:
+
+{lang="text"}
+~~~~~~~~
+  import shapeless._
+  
+  object DerivedEq {
+    def gen[A, R: DerivedEq](implicit G: Generic.Aux[A, R]): Eq[A] =
+      (a1, a2) => Eq[R].eqv(G.to(a1), G.to(a2))
+  }
+~~~~~~~~
+
+We've reduced the problem to providing an implicit `Eq[R]` for an `R` that is
+the `Generic` representation of `A`. First consider products, where `R <:
+HList`. This is the signature we want to implement:
+
+{lang="text"}
+~~~~~~~~
+  implicit def hcons[H: Eq, T <: HList: DerivedEq]: DerivedEq[H :: T]
+~~~~~~~~
+
+because if we can implement it for a head and a tail, the compiler will be able
+to recurse on this method until it reaches the end of the list. Where we will
+need to provide an instance for the empty `HNil`
+
+{lang="text"}
+~~~~~~~~
+  implicit def hnil: DerivedEq[HNil]
+~~~~~~~~
+
+We implement these methods
+
+{lang="text"}
+~~~~~~~~
+  implicit def hcons[H: Eq, T <: HList: DerivedEq]: DerivedEq[H :: T] =
+    (h1, h2) => Eq[H].eqv(h1.head, h2.head) && Eq[T].eqv(h1.tail, h2.tail)
+  
+  implicit val hnil: DerivedEq[HNil] = (_, _) => true
+~~~~~~~~
+
+and for coproducts we want to implement these signatures
+
+{lang="text"}
+~~~~~~~~
+  implicit def ccons[H: Eq, T <: Coproduct: DerivedEq]: DerivedEq[H :+: T]
+  implicit def cnil: DerivedEq[CNil]
+~~~~~~~~
+
+`.cnil` will never be called for a typeclass like `Eq` with type parameters
+only in contravariant position, but the compiler doesn't know that so we have to
+provide a stub:
+
+{lang="text"}
+~~~~~~~~
+  implicit val cnil: DerivedEq[CNil] = (_, _) => sys.error("impossible")
+~~~~~~~~
+
+For the coproduct case we can only compare two things if they align, which is
+when they are both `Inl` or `Inr`
+
+{lang="text"}
+~~~~~~~~
+  implicit def ccons[H: Eq, T <: Coproduct: DerivedEq]: DerivedEq[H :+: T] = {
+    case (Inl(c1), Inl(c2)) => Eq[H].eqv(c1, c2)
+    case (Inr(c1), Inr(c2)) => Eq[T].eqv(c1, c2)
+    case _                  => false
+  }
+~~~~~~~~
+
+It is noteworthy that our methods align with the concept of `.trivial` (`hnil`)
+and `.contramap2` (`hlist`)! However, we don't get any of the advantages of
+implementing `ContravariantMonoidal`, as now we must start from scratch when
+writing tests for this code.
+
+So let's test this thing with a simple ADT
+
+{lang="text"}
+~~~~~~~~
+  sealed abstract class Foo
+  final case class Bar(s: String)          extends Foo
+  final case class Faz(b: Boolean, i: Int) extends Foo
+  final case object Baz                    extends Foo
+~~~~~~~~
+
+We need to provide instances on the companions:
+
+{lang="text"}
+~~~~~~~~
+  object Foo {
+    implicit val equal: Eq[Foo] = DerivedEq.gen
+  }
+  object Bar {
+    implicit val equal: Eq[Bar] = DerivedEq.gen
+  }
+  object Faz {
+    implicit val equal: Eq[Faz] = DerivedEq.gen
+  }
+  final case object Baz extends Foo {
+    implicit val equal: Eq[Baz.type] = DerivedEq.gen
+  }
+~~~~~~~~
+
+But it doesn't compile
+
+{lang="text"}
+~~~~~~~~
+  [error] shapeless.scala:41:38: ambiguous implicit values:
+  [error]  both value hnil in object DerivedEq of type => DerivedEq[HNil]
+  [error]  and value cnil in object DerivedEq of type => DerivedEq[CNil]
+  [error]  match expected type DerivedEq[R]
+  [error]     : Eq[Baz.type] = DerivedEq.gen
+~~~~~~~~
+
+The problem, which is not at all evident from the error, is that the compiler is
+unable to work out what `R` is.
+We need to provide the explicit type parameters when calling `gen`, e.g.
+
+{lang="text"}
+~~~~~~~~
+  implicit val equal: Eq[Baz.type] = DerivedEq.gen[Baz.type, HNil]
+~~~~~~~~
+
+or we can use the `Generic` macro to help us and let the compiler infer the generic representation
+
+{lang="text"}
+~~~~~~~~
+  final case object Baz extends Foo {
+    implicit val generic             = Generic[Baz.type]
+    implicit val equal: Eq[Baz.type] = DerivedEq.gen[Baz.type, generic.Repr]
+  }
+  ...
+~~~~~~~~
+
+The reason why this fixes the problem is because the type signature
+
+{lang="text"}
+~~~~~~~~
+  def gen[A, R: DerivedEq](implicit G: Generic.Aux[A, R]): Eq[A]
+~~~~~~~~
+
+desugars into
+
+{lang="text"}
+~~~~~~~~
+  def gen[A, R](implicit R: DerivedEq[R], G: Generic.Aux[A, R]): Eq[A]
+~~~~~~~~
+
+The Scala compiler solves type constraints left to right, so it finds many
+different solutions to `DerivedEq[R]` before constraining it with the
+`Generic.Aux[A, R]`. Another way to solve this is to not use context bounds.
+
+However, this implementation still has a bug: it fails for recursive types **at
+runtime**, e.g.
+
+{lang="text"}
+~~~~~~~~
+  sealed trait ATree
+  object ATree {
+    implicit val equal: Eq[ATree] = gen
+  }
+  final case class Leaf(value: String)               extends ATree
+  object Leaf {
+    implicit val equal: Eq[Leaf] = gen
+  }
+  final case class Branch(left: ATree, right: ATree) extends ATree
+  object Branch {
+    implicit val equal: Eq[Branch] = gen
+  }
+~~~~~~~~
+
+{lang="text"}
+~~~~~~~~
+  scala> val leaf1: Leaf    = Leaf("hello")
+         val leaf2: Leaf    = Leaf("goodbye")
+         val branch: Branch = Branch(leaf1, leaf2)
+         val tree1: ATree   = Branch(leaf1, branch)
+         val tree2: ATree   = Branch(leaf2, branch)
+  
+  scala> assert(tree1 =!= tree2)
+  [error] java.lang.NullPointerException
+  [error] at DerivedEq$.shapes$DerivedEq$$$anonfun$hcons$1(shapeless.scala:16)
+          ...
+~~~~~~~~
+
+The reason why this happens is because `Eq[Tree]` depends on the
+`Eq[Branch]`, which depends on the `Eq[Tree]`. Recursion and BANG!
+It must be loaded lazily, not eagerly.
+
+The macro types `Cached`, `Strict` and `Lazy` modify the compiler's type
+inference behaviour allowing us to achieve the laziness we require. The pattern
+to follow is to use `Cached[Strict[_]]` on the entry point and `Lazy[_]` around
+the `H` instances.
+
+{lang="text"}
+~~~~~~~~
+  sealed trait DerivedEq[A] extends Eq[A]
+  object DerivedEq {
+    def gen[A, R](
+      implicit G: Generic.Aux[A, R],
+      R: Cached[Strict[DerivedEq[R]]]
+    ): Eq[A] = new Eq[A] {
+      def eqv(a1: A, a2: A) =
+        quick(a1, a2) || R.value.value.eqv(G.to(a1), G.to(a2))
+    }
+  
+    implicit def hcons[H, T <: HList](
+      implicit H: Lazy[Eq[H]],
+      T: DerivedEq[T]
+    ): DerivedEq[H :: T] = new DerivedEq[H :: T] {
+      def eqv(ht1: H :: T, ht2: H :: T) =
+        (quick(ht1.head, ht2.head) || H.value.eqv(ht1.head, ht2.head)) &&
+          T.eqv(ht1.tail, ht2.tail)
+    }
+  
+    implicit val hnil: DerivedEq[HNil] = new DerivedEq[HNil] {
+      def eqv(h1: HNil, h2: HNil) = true
+    }
+  
+    implicit def ccons[H, T <: Coproduct](
+      implicit H: Lazy[Eq[H]],
+      T: DerivedEq[T]
+    ): DerivedEq[H :+: T] = new DerivedEq[H :+: T] {
+      def eqv(ht1: H :+: T, ht2: H :+: T) = (ht1, ht2) match {
+        case (Inl(c1), Inl(c2)) => quick(c1, c2) || H.value.eqv(c1, c2)
+        case (Inr(c1), Inr(c2)) => T.eqv(c1, c2)
+        case _                  => false
+      }
+    }
+  
+    implicit val cnil: DerivedEq[CNil] = new DerivedEq[CNil] {
+      def eqv(c1: CNil, c2: CNil) = sys.error("impossible")
+    }
+  
+    @inline private final def quick(a: Any, b: Any): Boolean =
+      a.asInstanceOf[AnyRef].eq(b.asInstanceOf[AnyRef])
+  }
+~~~~~~~~
+
+We can now call
+
+{lang="text"}
+~~~~~~~~
+  assert(tree1 =!= tree2)
+~~~~~~~~
+
+without a runtime exception.
+
+
+### Example: `Default`
+
+Here we create `HList` and `Coproduct` values, and must provide a value for the
+`CNil` case as it corresponds to the case where no coproduct is able to provide
+a value.
+
+{lang="text"}
+~~~~~~~~
+  sealed trait DerivedDefault[A] extends Default[A]
+  object DerivedDefault {
+    def gen[A, R](
+      implicit G: Generic.Aux[A, R],
+      R: Cached[Strict[DerivedDefault[R]]]
+    ): Default[A] = new Default[A] {
+      def default = R.value.value.default.map(G.from)
+    }
+  
+    implicit def hcons[H, T <: HList](
+      implicit H: Lazy[Default[H]],
+      T: DerivedDefault[T]
+    ): DerivedDefault[H :: T] = new DerivedDefault[H :: T] {
+      def default =
+        for {
+          head <- H.value.default
+          tail <- T.default
+        } yield head :: tail
+    }
+  
+    implicit val hnil: DerivedDefault[HNil] = new DerivedDefault[HNil] {
+      def default = Right(HNil)
+    }
+  
+    implicit def ccons[H, T <: Coproduct](
+      implicit H: Lazy[Default[H]],
+      T: DerivedDefault[T]
+    ): DerivedDefault[H :+: T] = new DerivedDefault[H :+: T] {
+      def default = H.value.default.map(Inl(_)).orElse(T.default.map(Inr(_)))
+    }
+  
+    implicit val cnil: DerivedDefault[CNil] = new DerivedDefault[CNil] {
+      def default = Left("not a valid coproduct")
+    }
+  }
+~~~~~~~~
+
+Much as we could draw an analogy between `Eq` and `ContravariantMonoidal`, we
+can see the relationship to `Applicative` in `.point` (`hnil`) and `.map2`
+(`.hcons`).
+
+There is little to be learned from an example like `Semigroup`, so we will skip
+to encoders and decoders.
+
+
+### Example: `JsEncoder`
+
+To be able to reproduce our Magnolia JSON encoder, we must be able to access:
+
+1.  field names and class names
+2.  annotations for user preferences
+3.  default values on a `case class`
+
+We will begin by creating an encoder that handles only the sensible defaults.
+
+To get field names, we use `LabelledGeneric` instead of `Generic`, and when
+defining the type of the head element, use `FieldType[K, H]` instead of just
+`H`. A `Witness.Aux[K]` provides the value of the field name at runtime.
+
+All of our methods are going to return `JsObject`, so rather than returning a
+`JsValue` we can specialise and create `DerivedJsEncoder` that has a different
+type signature to `JsEncoder`.
+
+{lang="text"}
+~~~~~~~~
+  import shapeless._, labelled._
+  
+  sealed trait DerivedJsEncoder[R] {
+    def toJsFields(r: R): List[(String, JsValue)]
+  }
+  object DerivedJsEncoder {
+    def gen[A, R](
+      implicit G: LabelledGeneric.Aux[A, R],
+      R: Cached[Strict[DerivedJsEncoder[R]]]
+    ): JsEncoder[A] = new JsEncoder[A] {
+      def toJson(a: A) = JsObject(R.value.value.toJsFields(G.to(a)))
+    }
+  
+    implicit def hcons[K <: Symbol, H, T <: HList](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[T]
+    ): DerivedJsEncoder[FieldType[K, H] :: T] =
+      new DerivedJsEncoder[A, FieldType[K, H] :: T] {
+        private val field = K.value.name
+        def toJsFields(ht: FieldType[K, H] :: T) =
+          ht match {
+            case head :: tail =>
+              val rest = T.toJsFields(tail)
+              H.value.toJson(head) match {
+                case JsNull => rest
+                case value  => (field -> value) :: rest
+              }
+          }
+      }
+  
+    implicit val hnil: DerivedJsEncoder[HNil] =
+      new DerivedJsEncoder[HNil] {
+        def toJsFields(h: HNil) = Nil
+      }
+  
+    implicit def ccons[K <: Symbol, H, T <: Coproduct](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[T]
+    ): DerivedJsEncoder[FieldType[K, H] :+: T] =
+      new DerivedJsEncoder[FieldType[K, H] :+: T] {
+        private val hint = ("type" -> JsString(K.value.name))
+        def toJsFields(ht: FieldType[K, H] :+: T) = ht match {
+          case Inl(head) =>
+            H.value.toJson(head) match {
+              case JsObject(fields) => hint :: fields
+              case v                => List("xvalue" -> v)
+            }
+  
+          case Inr(tail) => T.toJsFields(tail)
+        }
+      }
+  
+    implicit val cnil: DerivedJsEncoder[CNil] =
+      new DerivedJsEncoder[CNil] {
+        def toJsFields(c: CNil) = sys.error("impossible")
+      }
+  
+  }
+~~~~~~~~
+
+Shapeless selects codepaths at compiletime based on the presence of annotations,
+which can lead to more optimised code, at the expense of code repetition. This
+means that the number of annotations we are dealing with, and their subtypes,
+must be manageable or we can find ourselves writing 10x the amount of code. We
+change our three annotations into one containing all the customisation
+parameters:
+
+{lang="text"}
+~~~~~~~~
+  case class json(
+    nulls: Boolean,
+    field: Option[String],
+    hint: Option[String]
+  ) extends Annotation
+~~~~~~~~
+
+All users of the annotation must provide all three values since default values
+and convenience methods are not available to annotation constructors. We can
+write custom extractors so we don't have to change our Magnolia code
+
+{lang="text"}
+~~~~~~~~
+  object json {
+    object nulls {
+      def unapply(j: json): Boolean = j.nulls
+    }
+    object field {
+      def unapply(j: json): Option[String] = j.field
+    }
+    object hint {
+      def unapply(j: json): Option[String] = j.hint
+    }
+  }
+~~~~~~~~
+
+We can request `Annotation[json, A]` for a `case class` or `sealed trait` to get access to the annotation, but we must write an `hcons` and a `ccons` dealing with both cases because the evidence will not be generated if the annotation is not present. We therefore have to introduce a lower priority implicit scope and put the "no annotation" evidence there.
+
+We can also request `Annotations.Aux[json, A, J]` evidence to obtain an `HList`
+of the `json` annotation for type `A`. Again, we must provide `hcons` and
+`ccons` dealing with the case where there is and is not an annotation.
+
+To support this one annotation, we must write four times as much code as before!
+
+Lets start by rewriting the `JsEncoder`, only handling user code that doesn't
+have any annotations. Now any code that uses the `@json` will fail to compile,
+which is a good safety net.
+
+We must add an `A` and `J` type to the `DerivedJsEncoder` and thread through the
+annotations on its `.toJsObject` method. Our `.hcons` and `.ccons` evidence now
+provides instances for `DerivedJsEncoder` with a `None.type` annotation and we
+move them to a lower priority so that we can deal with `Annotation[json, A]` in
+the higher priority.
+
+Note that the evidence for `J` is listed before `R`. This is important, since
+the compiler must first fix the type of `J` before it can solve for `R`.
+
+{lang="text"}
+~~~~~~~~
+  sealed trait DerivedJsEncoder[A, R, J <: HList] {
+    def toJsFields(r: R, anns: J): List[(String, JsValue)]
+  }
+  object DerivedJsEncoder extends DerivedJsEncoder1 {
+    def gen[A, R, J <: HList](
+      implicit
+      G: LabelledGeneric.Aux[A, R],
+      J: Annotations.Aux[json, A, J],
+      R: Cached[Strict[DerivedJsEncoder[A, R, J]]]
+    ): JsEncoder[A] = new JsEncoder[A] {
+      def toJson(a: A) = JsObject(R.value.value.toJsFields(G.to(a), J()))
+    }
+  
+    implicit def hnil[A]: DerivedJsEncoder[A, HNil, HNil] =
+      new DerivedJsEncoder[A, HNil, HNil] {
+        def toJsFields(h: HNil, a: HNil) = Nil
+      }
+  
+    implicit def cnil[A]: DerivedJsEncoder[A, CNil, HNil] =
+      new DerivedJsEncoder[A, CNil, HNil] {
+        def toJsFields(c: CNil, a: HNil) = sys.error("impossible")
+      }
+  }
+  private[jsonformat] trait DerivedJsEncoder1 {
+    implicit def hcons[A, K <: Symbol, H, T <: HList, J <: HList](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :: T, None.type :: J] =
+      new DerivedJsEncoder[A, FieldType[K, H] :: T, None.type :: J] {
+        private val field = K.value.name
+        def toJsFields(ht: FieldType[K, H] :: T, anns: None.type :: J) =
+          ht match {
+            case head :: tail =>
+              val rest = T.toJsFields(tail, anns.tail)
+              H.value.toJson(head) match {
+                case JsNull => rest
+                case value  => (field -> value) :: rest
+              }
+          }
+      }
+  
+    implicit def ccons[A, K <: Symbol, H, T <: Coproduct, J <: HList](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :+: T, None.type :: J] =
+      new DerivedJsEncoder[A, FieldType[K, H] :+: T, None.type :: J] {
+        private val hint = ("type" -> JsString(K.value.name))
+        def toJsFields(ht: FieldType[K, H] :+: T, anns: None.type :: J) =
+          ht match {
+            case Inl(head) =>
+              H.value.toJson(head) match {
+                case JsObject(fields) => hint :: fields
+                case v                => List("xvalue" -> v)
+              }
+            case Inr(tail) => T.toJsFields(tail, anns.tail)
+          }
+      }
+  }
+~~~~~~~~
+
+Now we can add the type signatures for the six new methods, covering all the
+possibilities of where the annotation can be. Note that we only support **one**
+annotation in each position. If the user provides multiple annotations, anything
+after the first will be silently ignored.
+
+We're now running out of names for things, so we will arbitrarily call it
+`Annotated` when there is an annotation on the `A`, and `Custom` when there is
+an annotation on a field:
+
+{lang="text"}
+~~~~~~~~
+  object DerivedJsEncoder extends DerivedJsEncoder1 {
+    ...
+    implicit def hconsAnnotated[A, K <: Symbol, H, T <: HList, J <: HList](
+      implicit
+      A: Annotation[json, A],
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :: T, None.type :: J]
+  
+    implicit def cconsAnnotated[A, K <: Symbol, H, T <: Coproduct, J <: HList](
+      implicit
+      A: Annotation[json, A],
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :+: T, None.type :: J]
+  
+    implicit def hconsAnnotatedCustom[A, K <: Symbol, H, T <: HList, J <: HList](
+      implicit
+      A: Annotation[json, A],
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :: T, Some[json] :: J]
+  
+    implicit def cconsAnnotatedCustom[A, K <: Symbol, H, T <: Coproduct, J <: HList](
+      implicit
+      A: Annotation[json, A],
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :+: T, Some[json] :: J]
+  }
+  private[jsonformat] trait DerivedJsEncoder1 {
+    ...
+    implicit def hconsCustom[A, K <: Symbol, H, T <: HList, J <: HList](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :: T, Some[json] :: J] = ???
+  
+    implicit def cconsCustom[A, K <: Symbol, H, T <: Coproduct, J <: HList](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsEncoder[H]],
+      T: DerivedJsEncoder[A, T, J]
+    ): DerivedJsEncoder[A, FieldType[K, H] :+: T, Some[json] :: J]
+  }
+~~~~~~~~
+
+We don't actually need `.hconsAnnotated` or `.hconsAnnotatedCustom` for
+anything, since an annotation on a `case class` does not mean anything to the
+encoding of that product, it is only used in `.cconsAnnotated*`. We can therefore
+delete two methods.
+
+`.cconsAnnotated` and `.cconsAnnotatedCustom` can be defined as
+
+{lang="text"}
+~~~~~~~~
+  new DerivedJsEncoder[A, FieldType[K, H] :+: T, None.type :: J] {
+    private val hint = A().field.getOrElse("type") -> JsString(K.value.name)
+    def toJsFields(ht: FieldType[K, H] :+: T, anns: None.type :: J) = ht match {
+      case Inl(head) =>
+        H.value.toJson(head) match {
+          case JsObject(fields) => hint :: fields
+          case v                => List("xvalue" -> v)
+        }
+      case Inr(tail) => T.toJsFields(tail, anns.tail)
+    }
+  }
+~~~~~~~~
+
+and
+
+{lang="text"}
+~~~~~~~~
+  new DerivedJsEncoder[A, FieldType[K, H] :+: T, Some[json] :: J] {
+    private val hintfield = A().field.getOrElse("type")
+    def toJsFields(ht: FieldType[K, H] :+: T, anns: Some[json] :: J) = ht match {
+      case Inl(head) =>
+        val ann = anns.head.get
+        H.value.toJson(head) match {
+          case JsObject(fields) =>
+            val hint = (hintfield -> JsString(ann.hint.getOrElse(K.value.name)))
+            hint :: fields
+          case v =>
+            val xvalue = ann.field.getOrElse("xvalue")
+            List(xvalue -> v)
+        }
+      case Inr(tail) => T.toJsFields(tail, anns.tail)
+    }
+  }
+~~~~~~~~
+
+The use of `.head` and `.get` may be concerned but recall that the types here
+are `::` and `Some` meaning that these methods are total and safe to use.
+
+`.hconsCustom` and `.cconsCustom` are written
+
+{lang="text"}
+~~~~~~~~
+  new DerivedJsEncoder[A, FieldType[K, H] :: T, Some[json] :: J] {
+    def toJsFields(ht: FieldType[K, H] :: T, anns: Some[json] :: J) = ht match {
+      case head :: tail =>
+        val ann  = anns.head.get
+        val next = T.toJsFields(tail, anns.tail)
+        H.value.toJson(head) match {
+          case JsNull if !ann.nulls => next
+          case value =>
+            val field = ann.field.getOrElse(K.value.name)
+            (field -> value) :: next
+        }
+    }
+  }
+~~~~~~~~
+
+and
+
+{lang="text"}
+~~~~~~~~
+  new DerivedJsEncoder[A, FieldType[K, H] :+: T, Some[json] :: J] {
+    def toJsFields(ht: FieldType[K, H] :+: T, anns: Some[json] :: J) = ht match {
+      case Inl(head) =>
+        val ann = anns.head.get
+        H.value.toJson(head) match {
+          case JsObject(fields) =>
+            val hint = ("type" -> JsString(ann.hint.getOrElse(K.value.name)))
+            hint :: fields
+          case v =>
+            val xvalue = ann.field.getOrElse("xvalue")
+            List(xvalue -> v)
+        }
+      case Inr(tail) => T.toJsFields(tail, anns.tail)
+    }
+  }
+~~~~~~~~
+
+Obviously, there is a lot of boilerplate, but looking closely one can see that
+each method is implemented as efficiently as possible with the information it
+has available: codepaths are selected at compiletime rather than runtime.
+
+The performance obsessed may be able to refactor this code so all annotation
+information is available in advance, rather than injected via the `.toJsFields`
+method, with another layer of indirection. For absolute performance, we could
+also treat each customisation as a separate annotation, but that would multiply
+the amount of code we've written yet again, with additional cost to compilation
+time on downstream users. Such optimisations are beyond the scope of this book,
+but they are possible and people do them: the ability to shift work from runtime
+to compiletime is one of the most appealing things about generic programming.
+
+
+### `JsDecoder`
+
+The decoding side is much as we can expect based on previous examples. We can
+construct an instance of a `FieldType[K, H]` with the helper `field[K](h: H)`.
+Supporting only the sensible defaults means we write:
+
+{lang="text"}
+~~~~~~~~
+  sealed trait DerivedJsDecoder[A] {
+    def fromJsObject(j: JsObject): Either[String, A]
+  }
+  object DerivedJsDecoder {
+    def gen[A, R](
+      implicit G: LabelledGeneric.Aux[A, R],
+      R: Cached[Strict[DerivedJsDecoder[R]]]
+    ): JsDecoder[A] = new JsDecoder[A] {
+      def fromJson(j: JsValue) = j match {
+        case o @ JsObject(_) => R.value.value.fromJsObject(o).map(G.from)
+        case other           => fail("JsObject", other)
+      }
+    }
+  
+    implicit def hcons[K <: Symbol, H, T <: HList](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsDecoder[H]],
+      T: DerivedJsDecoder[T]
+    ): DerivedJsDecoder[FieldType[K, H] :: T] =
+      new DerivedJsDecoder[FieldType[K, H] :: T] {
+        private val fieldname = K.value.name
+        def fromJsObject(j: JsObject) = {
+          val value = j.get(fieldname).getOrElse(JsNull)
+          for {
+            head  <- H.value.fromJson(value)
+            tail  <- T.fromJsObject(j)
+          } yield field[K](head) :: tail
+        }
+      }
+  
+    implicit val hnil: DerivedJsDecoder[HNil] = new DerivedJsDecoder[HNil] {
+      private val nil               = Right(HNil)
+      def fromJsObject(j: JsObject) = nil
+    }
+  
+    implicit def ccons[K <: Symbol, H, T <: Coproduct](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsDecoder[H]],
+      T: DerivedJsDecoder[T]
+    ): DerivedJsDecoder[FieldType[K, H] :+: T] =
+      new DerivedJsDecoder[FieldType[K, H] :+: T] {
+        private val hint = ("type" -> JsString(K.value.name))
+        def fromJsObject(j: JsObject) =
+          if (j.fields.element(hint)) {
+            j.get("xvalue")
+              .into {
+                case Right(xvalue) => H.value.fromJson(xvalue)
+                case Left(_)      => H.value.fromJson(j)
+              }
+              .map(h => Inl(field[K](h)))
+          } else
+            T.fromJsObject(j).map(Inr(_))
+      }
+  
+    implicit val cnil: DerivedJsDecoder[CNil] = new DerivedJsDecoder[CNil] {
+      def fromJsObject(j: JsObject) = fail(s"JsObject with 'type' field", j)
+    }
+  }
+~~~~~~~~
+
+Adding user preferences via annotations follows the same route as
+`DerivedJsEncoder` and is mechanical, so left as an exercise to the reader.
+
+One final thing is missing: `case class` default values. We can request evidence
+but a big problem is that we can no longer use the same derivation mechanism for
+products and coproducts: the evidence is never created for coproducts.
+
+The solution is quite drastic. We must split our `DerivedJsDecoder` into
+`DerivedCoproductJsDecoder` and `DerivedProductJsDecoder`. We will focus our
+attention on the `DerivedProductJsDecoder`, and while we are at it we will
+use a `Map` for faster field lookup:
+
+{lang="text"}
+~~~~~~~~
+  sealed trait DerivedProductJsDecoder[A, R, J <: HList, D <: HList] {
+    private[jsonformat] def fromJsObject(
+      j: Map[String, JsValue],
+      anns: J,
+      defaults: D
+    ): Either[String, R]
+  }
+~~~~~~~~
+
+We can request evidence of default values with `Default.Aux[A, D]` and duplicate
+all the methods to deal with the case where we do and do not have a default
+value. However, Shapeless is merciful and provides
+`Default.AsOptions.Aux[A, D]` letting us handle defaults at runtime.
+
+{lang="text"}
+~~~~~~~~
+  object DerivedProductJsDecoder {
+    def gen[A, R, J <: HList, D <: HList](
+      implicit G: LabelledGeneric.Aux[A, R],
+      J: Annotations.Aux[json, A, J],
+      D: Default.AsOptions.Aux[A, D],
+      R: Cached[Strict[DerivedProductJsDecoder[A, R, J, D]]]
+    ): JsDecoder[A] = new JsDecoder[A] {
+      def fromJson(j: JsValue) = j match {
+        case o @ JsObject(_) =>
+          R.value.value.fromJsObject(o.fields.toMap, J(), D()).map(G.from)
+        case other => fail("JsObject", other)
+      }
+    }
+    ...
+  }
+~~~~~~~~
+
+We must move the `.hcons` and `.hnil` methods onto the companion of the new
+sealed typeclass, which can handle default values
+
+{lang="text"}
+~~~~~~~~
+  object DerivedProductJsDecoder {
+    ...
+      implicit def hnil[A]: DerivedProductJsDecoder[A, HNil, HNil, HNil] =
+      new DerivedProductJsDecoder[A, HNil, HNil, HNil] {
+        private val nil = Right(HNil)
+        def fromJsObject(j: StringyMap[JsValue], a: HNil, defaults: HNil) = nil
+      }
+  
+    implicit def hcons[A, K <: Symbol, H, T <: HList, J <: HList, D <: HList](
+      implicit
+      K: Witness.Aux[K],
+      H: Lazy[JsDecoder[H]],
+      T: DerivedProductJsDecoder[A, T, J, D]
+    ): DerivedProductJsDecoder[A, FieldType[K, H] :: T, None.type :: J, Option[H] :: D] =
+      new DerivedProductJsDecoder[A, FieldType[K, H] :: T, None.type :: J, Option[H] :: D] {
+        private val fieldname = K.value.name
+        def fromJsObject(
+          j: StringyMap[JsValue],
+          anns: None.type :: J,
+          defaults: Option[H] :: D
+        ) =
+          for {
+            head <- j.get(fieldname) match {
+                     case Maybe.Just(v) => H.value.fromJson(v)
+                     case _ =>
+                       defaults.head match {
+                         case Some(default) => Right(default)
+                         case None          => H.value.fromJson(JsNull)
+                       }
+                   }
+            tail <- T.fromJsObject(j, anns.tail, defaults.tail)
+          } yield field[K](head) :: tail
+      }
+    ...
+  }
+~~~~~~~~
+
+
+### Example: `UrlQueryWriter`
+
+Our `drone-dynamic-agents` application could
+benefit from a typeclass derivation of the `UrlQueryWriter` typeclass, which is
+built out of `UrlEncodedWriter` instances for each field entry. It does not
+support coproducts:
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait UrlQueryWriter[A] {
+    def toUrlQuery(a: A): UrlQuery
+  }
+  trait DerivedUrlQueryWriter[T] extends UrlQueryWriter[T]
+  object DerivedUrlQueryWriter {
+    def gen[T, Repr](
+      implicit
+      G: LabelledGeneric.Aux[T, Repr],
+      CR: Cached[Strict[DerivedUrlQueryWriter[Repr]]]
+    ): UrlQueryWriter[T] = { t =>
+      CR.value.value.toUrlQuery(G.to(t))
+    }
+  
+    implicit val hnil: DerivedUrlQueryWriter[HNil] = { _ =>
+      UrlQuery(Nil)
+    }
+    implicit def hcons[Key <: Symbol, A, Remaining <: HList](
+      implicit Key: Witness.Aux[Key],
+      LV: Lazy[UrlEncodedWriter[A]],
+      DR: DerivedUrlQueryWriter[Remaining]
+    ): DerivedUrlQueryWriter[FieldType[Key, A] :: Remaining] = {
+      case head :: tail =>
+        val first =
+          Key.value.name -> URLDecoder.decode(LV.value.toUrlEncoded(head).value, "UTF-8")
+        val rest = DR.toUrlQuery(tail)
+        UrlQuery(first :: rest.params)
+    }
+  }
+~~~~~~~~
+
+It is reasonable to ask if these 30 lines are actually an improvement over the 8
+lines for the 2 manual instances our application needs: a decision to be taken
+on a case by case basis.
+
+For completeness, the `UrlEncodedWriter` derivation can be written with Magnolia
+
+{lang="text"}
+~~~~~~~~
+  object UrlEncodedWriterMagnolia {
+    type Typeclass[a] = UrlEncodedWriter[a]
+    def combine[A](ctx: CaseClass[UrlEncodedWriter, A]) = a =>
+      Refined.unsafeApply(ctx.parameters.map { p =>
+        p.label + "=" + p.typeclass.toUrlEncoded(p.dereference(a))
+      }.toList.intercalate("&"))
+    def gen[A]: UrlEncodedWriter[A] = macro Magnolia.gen[A]
+  }
+~~~~~~~~
+
+
+### Drawbacks
+
+Not only is fully automatic
+Shapeless derivation [the most common cause of slow compiles](https://www.scala-lang.org/blog/2018/06/04/scalac-profiling.html), it is also a
+painful source of typeclass coherence bugs.
+
+Fully automatic derivation is when the `def gen` are `implicit` such that a call
+will recurse for all entries in the ADT. Because of the way that implicit scopes
+work, an imported `implicit def` will have a higher priority than custom
+instances on companions, creating a source of typeclass decoherence. For
+example, consider this code if our `.gen` were implicit
+
+{lang="text"}
+~~~~~~~~
+  import DerivedJsEncoder._
+  
+  final case class Foo(s: String)
+  object Foo {
+    implicit val jsencoder: JsEncoder[Foo] = JsEncoder[String].contramap(_.s)
+  }
+  
+  final case class Bar(foo: Foo)
+~~~~~~~~
+
+We might expect the full-auto encoded form of `Bar("hello")` to look like
+
+{lang="text"}
+~~~~~~~~
+  {
+    "foo":"hello"
+  }
+~~~~~~~~
+
+because we have used `.contramap` for `Foo`. But it can instead be
+
+{lang="text"}
+~~~~~~~~
+  {
+    "foo": {
+      "s":"hello"
+    }
+  }
+~~~~~~~~
+
+Worse yet is when implicit methods are added to the companion of the typeclass,
+meaning that the typeclass is always derived at the point of use and users are
+unable opt out.
+
+Fundamentally, when writing generic programs, implicits can be ignored by the
+compiler depending on scope, meaning that we lose the compiletime safety that
+was our motivation for programming at the type level in the first place!
+
+Everything is much simpler when `implicit` is only used for
+coherent, globally unique, typeclasses.
+
+
+## Performance
+
+There is no silver bullet when it comes to typeclass derivation. An axis to
+consider is performance: both at compiletime and runtime.
+
+
+#### Compile Times
+
+When it comes to compilation times, Shapeless is the outlier. It is not uncommon
+to see a small project expand from a one second compile to a one minute compile.
+To investigate compilation issues, we can profile our applications with the
+`scalac-profiling` plugin
+
+{lang="text"}
+~~~~~~~~
+  addCompilerPlugin("ch.epfl.scala" %% "scalac-profiling" % "1.0.0")
+  scalacOptions ++= Seq("-Ystatistics:typer", "-P:scalac-profiling:no-profiledb")
+~~~~~~~~
+
+It produces output that can generate a *flame graph*.
+
+For a typical Shapeless derivation, we get a lively chart
+
+{width=90%}
+![](images/implicit-flamegraph-jsonformat-jmh.png)
+
+almost the entire compile time is spent in implicit resolution. Note that this
+also includes compiling the Magnolia and manual instances,
+but the Shapeless computations dominate.
+
+And this is when it works. If there is a problem with a shapeless derivation,
+the compiler can get stuck in an infinite loop and must be killed.
+
+
+#### Runtime Performance
+
+If we move to runtime performance, the answer is always *it depends*.
+
+Assuming that the derivation logic has been written in an efficient way, it is
+only possible to know which is faster through experimentation.
+
+The `jsonformat` library uses the [Java Microbenchmark Harness (JMH)](http://openjdk.java.net/projects/code-tools/jmh/) on models
+that map to GeoJSON, Google Maps, and Twitter, contributed by Andriy
+Plokhotnyuk. There are three tests per model:
+
+-   encoding the `ADT` to a `JsValue`
+-   a successful decoding of the same `JsValue` back into an ADT
+-   a failure decoding of a `JsValue` with a data error
+
+applied to the following implementations:
+
+-   Magnolia
+-   Shapeless
+-   manually written
+
+with the equivalent optimisations in each. The results are in operations per
+second (higher is better), on a powerful desktop computer, using a single
+thread:
+
+{lang="text"}
+~~~~~~~~
+  > jsonformat/jmh:run -i 5 -wi 5 -f1 -t1 -w1 -r1 .*encode*
+  Benchmark                                 Mode  Cnt       Score      Error  Units
+  
+  GeoJSONBenchmarks.encodeMagnolia         thrpt    5   70527.223 ±  546.991  ops/s
+  GeoJSONBenchmarks.encodeShapeless        thrpt    5   65925.215 ±  309.623  ops/s
+  GeoJSONBenchmarks.encodeManual           thrpt    5   96435.691 ±  334.652  ops/s
+  
+  GoogleMapsAPIBenchmarks.encodeMagnolia   thrpt    5   73107.747 ±  439.803  ops/s
+  GoogleMapsAPIBenchmarks.encodeShapeless  thrpt    5   53867.845 ±  510.888  ops/s
+  GoogleMapsAPIBenchmarks.encodeManual     thrpt    5  127608.402 ± 1584.038  ops/s
+  
+  TwitterAPIBenchmarks.encodeMagnolia      thrpt    5  133425.164 ± 1281.331  ops/s
+  TwitterAPIBenchmarks.encodeShapeless     thrpt    5   84233.065 ±  352.611  ops/s
+  TwitterAPIBenchmarks.encodeManual        thrpt    5  281606.574 ± 1975.873  ops/s
+~~~~~~~~
+
+We see that the manual implementations are in the lead, followed by Magnolia,
+with Shapeless from 30% to 70% the performance of the manual instances. Now for
+decoding
+
+{lang="text"}
+~~~~~~~~
+  > jsonformat/jmh:run -i 5 -wi 5 -f1 -t1 -w1 -r1 .*decode.*Success
+  Benchmark                                        Mode  Cnt       Score      Error  Units
+  
+  GeoJSONBenchmarks.decodeMagnoliaSuccess         thrpt    5   40850.270 ±  201.457  ops/s
+  GeoJSONBenchmarks.decodeShapelessSuccess        thrpt    5   41173.199 ±  373.048  ops/s
+  GeoJSONBenchmarks.decodeManualSuccess           thrpt    5  110961.246 ±  468.384  ops/s
+  
+  GoogleMapsAPIBenchmarks.decodeMagnoliaSuccess   thrpt    5   44577.796 ±  457.861  ops/s
+  GoogleMapsAPIBenchmarks.decodeShapelessSuccess  thrpt    5   31649.792 ±  861.169  ops/s
+  GoogleMapsAPIBenchmarks.decodeManualSuccess     thrpt    5   56250.913 ±  394.105  ops/s
+  
+  TwitterAPIBenchmarks.decodeMagnoliaSuccess      thrpt    5   55868.832 ± 1106.543  ops/s
+  TwitterAPIBenchmarks.decodeShapelessSuccess     thrpt    5   47711.161 ±  356.911  ops/s
+  TwitterAPIBenchmarks.decodeManualSuccess        thrpt    5   71962.394 ±  465.752  ops/s
+~~~~~~~~
+
+This is a tighter race for second place, with Shapeless and Magnolia keeping
+pace. Finally, decoding from a `JsValue` that contains invalid data (in an
+intentionally awkward position)
+
+{lang="text"}
+~~~~~~~~
+  > jsonformat/jmh:run -i 5 -wi 5 -f1 -t1 -w1 -r1 .*decode.*Error
+  Benchmark                                      Mode  Cnt        Score       Error  Units
+  
+  GeoJSONBenchmarks.decodeMagnoliaError         thrpt    5   981094.831 ± 11051.370  ops/s
+  GeoJSONBenchmarks.decodeShapelessError        thrpt    5   816704.635 ±  9781.467  ops/s
+  GeoJSONBenchmarks.decodeManualError           thrpt    5   586733.762 ±  6389.296  ops/s
+  
+  GoogleMapsAPIBenchmarks.decodeMagnoliaError   thrpt    5  1288888.446 ± 11091.080  ops/s
+  GoogleMapsAPIBenchmarks.decodeShapelessError  thrpt    5  1010145.363 ±  9448.110  ops/s
+  GoogleMapsAPIBenchmarks.decodeManualError     thrpt    5  1417662.720 ±  1197.283  ops/s
+  
+  TwitterAPIBenchmarks.decodeMagnoliaError      thrpt    5   128704.299 ±   832.122  ops/s
+  TwitterAPIBenchmarks.decodeShapelessError     thrpt    5   109715.865 ±   826.488  ops/s
+  TwitterAPIBenchmarks.decodeManualError        thrpt    5   148814.730 ±  1105.316  ops/s
+~~~~~~~~
+
+Just when we thought we were seeing a pattern, both Magnolia and Shapeless win
+the race when decoding invalid GeoJSON data, but manual instances win the Google
+Maps and Twitter challenges.
+
+The runtime performance of Magnolia and Shapeless is usually
+good enough. We should be realistic: we are not writing applications that need to
+be able to encode more than 130,000 values to JSON, per second, on a single
+core, on the JVM. If that is a problem, look into C++.
+
+It is unlikely that derived instances will be an application's bottleneck. Even
+if it is, there is the manually written escape hatch, which is more powerful and
+therefore more dangerous: it is easy to introduce typos, bugs, and even
+performance regressions by accident when writing a manual instance.
+
+A> We could spend a lifetime with the [`async-profiler`](https://github.com/jvm-profiling-tools/async-profiler) investigating CPU and object
+A> allocation flame graphs to make any of these implementations faster. For
+A> example, there are some optimisations in the actual `jsonformat` codebase not
+A> reproduced here, such as a more optimised `JsObject` field lookup, and inclusion
+A> of `.imap`, `.map` and `.contramap` on the relevant typeclasses, but it is fair
+A> to say that the codebase primarily focuses on readability over optimisation and
+A> still achieves incredible performance.
+
+
+## Summary
+
+When deciding on a technology to use for typeclass derivation, this feature
+chart may help:
+
+| Feature        | Cats | Magnolia | Shapeless    | Manual |
+|-------------- |---- |-------- |------------ |------ |
+| Laws           | yes  |          |              |        |
+| Fast compiles  | yes  | yes      |              | yes    |
+| Field names    |      | yes      | yes          |        |
+| Annotations    |      | yes      | partially    |        |
+| Default values |      | yes      | with caveats |        |
+| Complicated    |      |          | yes          |        |
+| Performance    |      |          |              | yes    |
+
+Prefer Cats typeclasses of typeclasses if possible, using Magnolia for encoders
+/ decoders or if performance is a larger concern, escalating to Shapeless for
+complicated derivations only if compilation times are not a concern.
+
+There is no need to write derivation rules for Cats core typeclasses: the
+[Typelevel Kittens](https://github.com/typelevel/kittens) project provides Shapeless-based derivation rules and
+[Magnolify](https://github.com/spotify/magnolify) has Magnolia based rules.
+
+Manual instances are always an escape hatch for special cases and to achieve the
+ultimate performance. Avoid introducing typo bugs with manual instances by using
+a code generation tool.
 
 
