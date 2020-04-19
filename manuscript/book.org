@@ -10720,12 +10720,12 @@ To finish, we will apply what we have learnt to wire up the example application,
 and implement an HTTP client and server using the [[https://http4s.org/][http4s]] pure FP library.
 
 The source code to the =drone-dynamic-agents= application is available along
-with the book's source code at =https://github.com/fommil/fpmortals= under the
+with the book's source code at =https://github.com/turt13/fpmortals-cats= under the
 =examples= folder. It is not necessary to be at a computer to read this chapter,
 but many readers may prefer to explore the codebase in addition to this text.
 
 Some parts of the application have been left unimplemented, as an exercise to
-the reader. See the =README= for further instructions.
+the reader.
 
 *** Overview
 
@@ -10792,13 +10792,13 @@ trait LocalClock[F[_]] {
 trait JsonClient[F[_]] {
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A]
 
   def post[P: UrlEncodedWriter, A: JsDecoder](
     uri: String Refined Url,
     payload: P,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A]
 }
 
@@ -10829,41 +10829,23 @@ trait Drone[F[_]] {
 trait Machines[F[_]] {
   def getTime: F[Epoch]
   def getManaged: F[NonEmptyList[MachineNode]]
-  def getAlive: F[MachineNode ==>> Epoch]
+  def getAlive: F[Map[MachineNode, Epoch]]
   def start(node: MachineNode): F[Unit]
   def stop(node: MachineNode): F[Unit]
 }
 #+END_SRC
 
-Note that some signatures from previous chapters have been refactored to use
-Scalaz data types, now that we know why they are superior to the stdlib.
-
 The data types are:
 
 #+BEGIN_SRC scala
-@xderiving(Order, Arbitrary)
 final case class Epoch(millis: Long) extends AnyVal
-
-@deriving(Order, Show)
 final case class MachineNode(id: String)
-
-@deriving(Equal, Show)
 final case class CodeToken(token: String, redirect_uri: String Refined Url)
-
-@xderiving(Equal, Show, ConfigReader)
 final case class RefreshToken(token: String) extends AnyVal
-
-@deriving(Equal, Show, ConfigReader)
 final case class BearerToken(token: String, expires: Epoch)
-
-@deriving(ConfigReader)
 final case class OAuth2Config(token: RefreshToken, server: ServerConfig)
-
-@deriving(ConfigReader)
 final case class AppConfig(drone: BearerToken, machines: OAuth2Config)
-
-@xderiving(UrlEncodedWriter)
-final case class UrlQuery(params: IList[(String, String)]) extends AnyVal
+final case class UrlQuery(params: List[(String, String)]) extends AnyVal
 #+END_SRC
 
 and the typeclasses are
@@ -10876,10 +10858,6 @@ and the typeclasses are
   def toUrlQuery(a: A): UrlQuery
 }
 #+END_SRC
-
-We derive useful typeclasses using =scalaz-deriving= and Magnolia. The
-=ConfigReader= typeclass is from the =pureconfig= library and is used to read
-runtime configuration from HOCON property files.
 
 And without going into the detail of how to implement the algebras, we need to
 know the dependency graph of our =DynAgentsModule=.
@@ -10921,18 +10899,18 @@ final class BearerJsonClientModule[F[_]: Monad](
 
 So far we have seen requirements for =F= to have an =Applicative[F]=, =Monad[F]=
 and =MonadState[F, BearerToken]=. All of these requirements can be satisfied by
-using =StateT[Task, BearerToken, ?]= as our application's context.
+using =StateT[IO, BearerToken, ?]= as our application's context.
 
-However, some of our algebras only have one interpreter, using =Task=
+However, some of our algebras only have one interpreter, using =IO=
 
 #+BEGIN_SRC scala
-final class LocalClockTask extends LocalClock[Task] { ... }
-final class SleepTask extends Sleep[Task] { ... }
+final class LocalClockIO extends LocalClock[IO] { ... }
+final class SleepIO extends Sleep[IO] { ... }
 #+END_SRC
 
-But recall that our algebras can provide a =liftM= on their companion, see
+But recall that our algebras shoud provide a =.mapK=, see
 Chapter 7.4 on the Monad Transformer Library, allowing us to lift a
-=LocalClock[Task]= into our desired =StateT[Task, BearerToken, ?]= context, and
+=LocalClock[IO]= into our desired =StateT[IO, BearerToken, ?]= context, and
 everything is consistent.
 
 Unfortunately, that is not the end of the story. Things get more complicated
@@ -10940,7 +10918,7 @@ when we go to the next layer. Our =JsonClient= has an interpreter using a
 different context
 
 #+BEGIN_SRC scala
-final class BlazeJsonClient[F[_]](H: Client[Task])(
+final class BlazeJsonClient[F[_]](H: Client[IO])(
   implicit
   F: MonadError[F, JsonClient.Error],
   I: LiftIO[F, Throwable]
@@ -10950,11 +10928,11 @@ object BlazeJsonClient {
     implicit
     F: MonadError[F, JsonClient.Error],
     I: LiftIO[F, Throwable]
-  ): Task[JsonClient[F]] = ...
+  ): IO[JsonClient[F]] = ...
 }
 #+END_SRC
 
-Note that the =BlazeJsonClient= constructor returns a =Task[JsonClient[F]]=, not
+Note that the =BlazeJsonClient= constructor returns a =IO[JsonClient[F]]=, not
 a =JsonClient[F]=. This is because the act of creating the client is effectful:
 mutable connection pools are created and managed internally by http4s.
 
@@ -10964,13 +10942,13 @@ mutable connection pools are created and managed internally by http4s.
 combination of both:
 
 #+BEGIN_SRC scala
-StateT[EitherT[Task, JsonClient.Error, ?], BearerToken, ?]
+StateT[EitherT[IO, JsonClient.Error, ?], BearerToken, ?]
 #+END_SRC
 
 A monad stack. Monad stacks automatically provide appropriate instances of
 =MonadState= and =MonadError= when nested, so we don't need to think about it.
 If we had hard-coded the implementation in the interpreter, and returned an
-=EitherT[Task, Error, ?]= from =BlazeJsonClient=, it would make it a lot harder
+=EitherT[IO, Error, ?]= from =BlazeJsonClient=, it would make it a lot harder
 to instantiate.
 #+END_ASIDE
 
@@ -10996,11 +10974,11 @@ final class AccessModule[F[_]: Monad](
 ) extends Access[F] { ... }
 
 final class BlazeUserInteraction private (
-  pserver: Promise[Void, Server[Task]],
+  pserver: Promise[Void, Server[IO]],
   ptoken: Promise[Void, String]
-) extends UserInteraction[Task] { ... }
+) extends UserInteraction[IO] { ... }
 object BlazeUserInteraction {
-  def apply(): Task[BlazeUserInteraction] = ...
+  def apply(): IO[BlazeUserInteraction] = ...
 }
 #+END_SRC
 
@@ -11055,14 +11033,14 @@ Everything gets a =.liftM= added to it to lift it into the larger stack.
 The code we want to write for the one-shot authentication mode is
 
 #+BEGIN_SRC scala
-  def auth(name: String): Task[Unit] = {
+  def auth(name: String): IO[Unit] = {
     for {
       config    <- readConfig[ServerConfig](name + ".server")
       ui        <- BlazeUserInteraction()
       auth      = new AuthModule(config)(ui)
       codetoken <- auth.authenticate
       client    <- BlazeJsonClient
-      clock     = new LocalClockTask
+      clock     = new LocalClockIO
       access    = new AccessModule(config)(client, clock)
       token     <- access.access(codetoken)
       _         <- putStrLn(s"got token: $token")
@@ -11071,30 +11049,30 @@ The code we want to write for the one-shot authentication mode is
 #+END_SRC
 
 where =.readConfig= and =.putStrLn= are library calls. We can think of them as
-=Task= interpreters of algebras that read the application's runtime
+=IO= interpreters of algebras that read the application's runtime
 configuration and print a string to the screen.
 
 But this code does not compile, for two reasons. Firstly, we need to consider
 what our monad stack is going to be. The =BlazeJsonClient= constructor returns a
-=Task= but the =JsonClient= methods require a =MonadError[...,
+=IO= but the =JsonClient= methods require a =MonadError[...,
 JsonClient.Error]=. This can be provided by =EitherT=. We can therefore
 construct the common monad stack for the entire =for= comprehension as
 
 #+BEGIN_SRC scala
-    type H[a] = EitherT[Task, JsonClient.Error, a]
+    type H[a] = EitherT[IO, JsonClient.Error, a]
 #+END_SRC
 
-Unfortunately this means we must =.liftM= everything that returns a =Task=,
+Unfortunately this means we must =.liftM= everything that returns a =IO=,
 which adds quite a lot of boilerplate. Unfortunately, the =.liftM= method does
 not take a type of shape =H[_]=, it takes a type of shape =H[_[_], _]=, so we
 need to create a type alias to help out the compiler:
 
 #+BEGIN_SRC scala
     type HT[f[_], a] = EitherT[f, JsonClient.Error, a]
-    type H[a]        = HT[Task, a]
+    type H[a]        = HT[IO, a]
 #+END_SRC
 
-we can now call =.liftM[HT]= when we receive a =Task=
+we can now call =.liftM[HT]= when we receive a =IO=
 
 #+BEGIN_SRC scala
     for {
@@ -11103,17 +11081,17 @@ we can now call =.liftM[HT]= when we receive a =Task=
       auth      = new AuthModule(config)(ui)
       codetoken <- auth.authenticate.liftM[HT]
       client    <- BlazeJsonClient[H].liftM[HT]
-      clock     = new LocalClockTask
+      clock     = new LocalClockIO
       access    = new AccessModule(config)(client, clock)
       token     <- access.access(codetoken)
       _         <- putStrLn(s"got token: $token").liftM[HT]
     } yield ()
 #+END_SRC
 
-But this still doesn't compile, because =clock= is a =LocalClock[Task]= and =AccessModule= requires a =LocalClock[H]=. We simply add the necessary =.liftM= boilerplate to the companion of =LocalClock= and can then lift the entire algebra
+But this still doesn't compile, because =clock= is a =LocalClock[IO]= and =AccessModule= requires a =LocalClock[H]=. We simply add the necessary =.liftM= boilerplate to the companion of =LocalClock= and can then lift the entire algebra
 
 #+BEGIN_SRC scala
-      clock     = LocalClock.liftM[Task, HT](new LocalClockTask)
+      clock     = LocalClock.liftM[IO, HT](new LocalClockIO)
 #+END_SRC
 
 and now everything compiles!
@@ -11138,20 +11116,20 @@ We now need to think about three layers, which we will call =F=, =G=, =H=
     type GT[f[_], a] = StateT[f, BearerToken, a]
     type FT[f[_], a] = StateT[f, WorldView, a]
 
-    type H[a]        = HT[Task, a]
+    type H[a]        = HT[IO, a]
     type G[a]        = GT[H, a]
     type F[a]        = FT[G, a]
 #+END_SRC
 
 Now some bad news about =.liftM=... it only works for one layer at a time. If we
-have a =Task[A]= and we want an =F[A]=, we have to go through each step and type
+have a =IO[A]= and we want an =F[A]=, we have to go through each step and type
 =ta.liftM[HT].liftM[GT].liftM[FT]=. Likewise, when lifting algebras we have to
 call =liftM= multiple times. To get a =Sleep[F]=, we have to type
 
 #+BEGIN_SRC scala
 val S: Sleep[F] = {
   import Sleep.liftM
-  liftM(liftM(liftM(new SleepTask)))
+  liftM(liftM(liftM(new SleepIO)))
 }
 #+END_SRC
 
@@ -11160,14 +11138,14 @@ and to get a =LocalClock[G]= we do two lifts
 #+BEGIN_SRC scala
 val T: LocalClock[G] = {
   import LocalClock.liftM
-  liftM(liftM(new LocalClockTask))
+  liftM(liftM(new LocalClockIO))
 }
 #+END_SRC
 
 The main application then becomes
 
 #+BEGIN_SRC scala
-  def agents(bearer: BearerToken): Task[Unit] = {
+  def agents(bearer: BearerToken): IO[Unit] = {
     ...
     for {
       config <- readConfig[AppConfig]
@@ -11192,17 +11170,17 @@ The main application then becomes
   }
 #+END_SRC
 
-where the outer loop is using =Task=, the middle loop is using =G=, and the
+where the outer loop is using =IO=, the middle loop is using =G=, and the
 inner loop is using =F=.
 
 The calls to =.run(start)= and =.eval(bearer)= are where we provide the initial
 state for the =StateT= parts of our application. The =.run= is to reveal the
 =EitherT= error.
 
-We can call these two application entry points from our =SafeApp=
+We can call these two application entry points from our =IOApp=
 
 #+BEGIN_SRC scala
-object Main extends SafeApp {
+object Main extends IOApp {
   def run(args: List[String]): IO[Void, ExitStatus] = {
     if (args.contains("--machines")) auth("machines")
     else agents(BearerToken("<invalid>", Epoch(0)))
@@ -11216,8 +11194,8 @@ object Main extends SafeApp {
 and then run it!
 
 #+BEGIN_SRC
-> runMain fommil.dda.Main --machines
-[info] Running (fork) fommil.dda.Main --machines
+> runMain fpmortals.dda.Main --machines
+[info] Running (fork) fpmortals.dda.Main --machines
 ...
 [info] Service bound to address /127.0.0.1:46687
 ...
@@ -11343,15 +11321,15 @@ Both our =.get= and =.post= methods require a conversion from the http4s
 #+BEGIN_SRC scala
 import JsonClient.Error
 
-final class BlazeJsonClient[F[_]] private (H: Client[Task])(
+final class BlazeJsonClient[F[_]] private (H: Client[IO])(
   implicit
   F: MonadError[F, Error],
   I: LiftIO[F, Throwable]
 ) extends JsonClient[F] {
   ...
-  def handler[A: JsDecoder](resp: http4s.Response[Task]): Task[Either[Error, A]] = {
+  def handler[A: JsDecoder](resp: http4s.Response[IO]): IO[Either[Error, A]] = {
     if (!resp.status.isSuccess)
-      Task.now(Left(JsonClient.ServerError(resp.status.code)))
+      IO.now(Left(JsonClient.ServerError(resp.status.code)))
     else
       for {
         text <- resp.body.through(fs2.text.utf8Decode).compile.foldMonoid
@@ -11363,10 +11341,10 @@ final class BlazeJsonClient[F[_]] private (H: Client[Task])(
 }
 #+END_SRC
 
-The =.through(fs2.text.utf8Decode)= is to convert a =Stream[Task, Byte]= into a
-=Stream[Task, String]=, with =.compile.foldMonoid= interpreting it with our
-=Task= and combining all the parts using the =Monoid[String]=, giving us a
-=Task[String]=.
+The =.through(fs2.text.utf8Decode)= is to convert a =Stream[IO, Byte]= into a
+=Stream[IO, String]=, with =.compile.foldMonoid= interpreting it with our
+=IO= and combining all the parts using the =Monoid[String]=, giving us a
+=IO[String]=.
 
 We then parse the string as JSON and use the =JsDecoder[A]= to create the
 required output.
@@ -11380,7 +11358,7 @@ This is our implementation of =.get=
   ): F[A] =
     I.liftIO(
         H.fetch(
-          http4s.Request[Task](
+          http4s.Request[IO](
             uri = convert(uri),
             headers = convert(headers)
           )
@@ -11391,7 +11369,7 @@ This is our implementation of =.get=
 
 =.get= is all plumbing: we convert our input types into the =http4s.Request=,
 then call =.fetch= on the =Client= with our =handler=. This gives us back a
-=Task[Error \/ A]=, but we need to return a =F[A]=. Therefore we use the
+=IO[Error \/ A]=, but we need to return a =F[A]=. Therefore we use the
 =LiftIO.liftIO= to create a =F[Error \/ A]= and then =.emap= to push the error
 into the =F=.
 
@@ -11400,7 +11378,7 @@ something like
 
 #+BEGIN_SRC
 [error] BlazeJsonClient.scala:95:64: could not find implicit value for parameter
-[error]  F: cats.effect.Sync[scalaz.ioeffect.Task]
+[error]  F: cats.effect.Sync[scalaz.ioeffect.IO]
 #+END_SRC
 
 Basically, something about a missing cat.
@@ -11427,15 +11405,15 @@ import scalaz.ioeffect.catz._
 The implementation of =.post= is similar but we must also provide an instance of
 
 #+BEGIN_SRC scala
-EntityEncoder[Task, String Refined UrlEncoded]
+EntityEncoder[IO, String Refined UrlEncoded]
 #+END_SRC
 
 Thankfully, the =EntityEncoder= typeclass provides conveniences to let us derive
 one from the existing =String= encoder
 
 #+BEGIN_SRC scala
-  implicit val encoder: EntityEncoder[Task, String Refined UrlEncoded] =
-    EntityEncoder[Task, String]
+  implicit val encoder: EntityEncoder[IO, String Refined UrlEncoded] =
+    EntityEncoder[IO, String]
       .contramap[String Refined UrlEncoded](_.value)
       .withContentType(
         `Content-Type`(MediaType.`application/x-www-form-urlencoded`)
@@ -11445,7 +11423,7 @@ one from the existing =String= encoder
 The only difference between =.get= and =.post= is the way we construct our =http4s.Request=
 
 #+BEGIN_SRC scala
-  http4s.Request[Task](
+  http4s.Request[IO](
     method = http4s.Method.POST,
     uri = convert(uri),
     headers = convert(headers)
@@ -11462,7 +11440,7 @@ object BlazeJsonClient {
     implicit
     F: MonadError[F, JsonClient.Error],
     I: LiftIO[F, Throwable]
-  ): Task[JsonClient[F]] =
+  ): IO[JsonClient[F]] =
     Http1Client(BlazeClientConfig.defaultConfig).map(new BlazeJsonClient(_))
 }
 #+END_SRC
@@ -11482,7 +11460,7 @@ import org.http4s.server.blaze._
 We need to create a =dsl= for our effect type, which we then import
 
 #+BEGIN_SRC scala
-  private val dsl = new Http4sDsl[Task] {}
+  private val dsl = new Http4sDsl[IO] {}
   import dsl._
 #+END_SRC
 
@@ -11492,21 +11470,21 @@ similar to any of other HTTP DSLs
 
 #+BEGIN_SRC scala
   private object Code extends QueryParamDecoderMatcher[String]("code")
-  private val service: HttpService[Task] = HttpService[Task] {
+  private val service: HttpService[IO] = HttpService[IO] {
     case GET -> Root :? Code(code) => ...
   }
 #+END_SRC
 
-The return type of each pattern match is a =Task[Response[Task]]=. In our
+The return type of each pattern match is a =IO[Response[IO]]=. In our
 implementation we want to take the =code= and put it into the =ptoken= promise:
 
 #+BEGIN_SRC scala
 final class BlazeUserInteraction private (
-  pserver: Promise[Throwable, Server[Task]],
+  pserver: Promise[Throwable, Server[IO]],
   ptoken: Promise[Throwable, String]
-) extends UserInteraction[Task] {
+) extends UserInteraction[IO] {
   ...
-  private val service: HttpService[Task] = HttpService[Task] {
+  private val service: HttpService[IO] = HttpService[IO] {
     case GET -> Root :? Code(code) =>
       ptoken.complete(code) >> Ok(
         "That seems to have worked, go back to the console."
@@ -11520,8 +11498,8 @@ but the definition of our services routes is not enough, we need to launch a
 server, which we do with =BlazeBuilder=
 
 #+BEGIN_SRC scala
-  private val launch: Task[Server[Task]] =
-    BlazeBuilder[Task].bindHttp(0, "localhost").mountService(service, "/").start
+  private val launch: IO[Server[IO]] =
+    BlazeBuilder[IO].bindHttp(0, "localhost").mountService(service, "/").start
 #+END_SRC
 
 Binding to port =0= makes the operating system assign an ephemeral port. We can
@@ -11531,27 +11509,27 @@ field.
 Our implementation of the =.start= and =.stop= methods is now straightforward
 
 #+BEGIN_SRC scala
-  def start: Task[String Refined Url] =
+  def start: IO[String Refined Url] =
     for {
       server  <- launch
       updated <- pserver.complete(server)
-      _ <- if (updated) Task.unit
+      _ <- if (updated) IO.unit
            else server.shutdown *> fail("server was already running")
     } yield mkUrl(server)
 
-  def stop: Task[CodeToken] =
+  def stop: IO[CodeToken] =
     for {
       server <- pserver.get
       token  <- ptoken.get
       _      <- IO.sleep(1.second) *> server.shutdown
     } yield CodeToken(token, mkUrl(server))
 
-  private def mkUrl(s: Server[Task]): String Refined Url = {
+  private def mkUrl(s: Server[IO]): String Refined Url = {
     val port = s.address.getPort
     Refined.unsafeApply(s"http://localhost:${port}/")
   }
   private def fail[A](s: String): String =
-    Task.fail(new IOException(s) with NoStackTrace)
+    IO.fail(new IOException(s) with NoStackTrace)
 #+END_SRC
 
 The =1.second= sleep is necessary to avoid shutting down the server before the
@@ -11563,9 +11541,9 @@ promises
 
 #+BEGIN_SRC scala
 object BlazeUserInteraction {
-  def apply(): Task[BlazeUserInteraction] = {
+  def apply(): IO[BlazeUserInteraction] = {
     for {
-      p1 <- Promise.make[Void, Server[Task]].widenError[Throwable]
+      p1 <- Promise.make[Void, Server[IO]].widenError[Throwable]
       p2 <- Promise.make[Void, String].widenError[Throwable]
     } yield new BlazeUserInteraction(p1, p2)
   }
@@ -11573,7 +11551,7 @@ object BlazeUserInteraction {
 #+END_SRC
 
 We could use =IO[Void, ?]= instead, but since the rest of our application is
-using =Task= (i.e. =IO[Throwable, ?]=), we =.widenError= to avoid introducing
+using =IO= (i.e. =IO[Throwable, ?]=), we =.widenError= to avoid introducing
 any boilerplate that would distract us.
 
 *** Thank You
