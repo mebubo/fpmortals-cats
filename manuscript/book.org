@@ -3358,7 +3358,7 @@ scala> List(1, 2) |+| List(3, 4)
 res: List[Int] = List(1, 2, 3, 4)
 #+END_SRC
 
-=Band= has the law that the =.append= operation of the same two
+=Band= has the law that the =.combine= operation of the same two
 elements is /idempotent/, i.e. gives the same value. Examples are
 anything that can only be one value, such as =Unit=, least upper
 bounds, or a =Set=. =Band= provides no further methods yet users can
@@ -11113,11 +11113,6 @@ and then run it!
 
 Yay!
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 *** Blaze
 
 We implement the HTTP client and server with the third party library =http4s=.
@@ -11149,10 +11144,9 @@ import org.http4s.client.blaze.{ BlazeClientConfig, Http1Client }
 The =Client= module can be summarised as
 
 #+BEGIN_SRC scala
-final class Client[F[_]](
-  val shutdown: F[Unit]
-)(implicit F: MonadError[F, Throwable]) {
+final class Client[F[_]: Effect](val shutdown: F[Unit]) {
   def fetch[A](req: Request[F])(f: Response[F] => F[A]): F[A] = ...
+  def fetch[A](req: F[Request[F]])(f: Response[F] => F[A]): F[A] = ...
   ...
 }
 #+END_SRC
@@ -11211,7 +11205,7 @@ We need to convert our header and URL representations into the versions required
 by http4s:
 
 #+BEGIN_SRC scala
-  def convert(headers: IList[(String, String)]): http4s.Headers =
+  def convert(headers: List[(String, String)]): http4s.Headers =
     http4s.Headers(
       headers.foldRight(List[http4s.Header]()) {
         case ((key, value), acc) => http4s.Header(key, value) :: acc
@@ -11227,17 +11221,15 @@ Both our =.get= and =.post= methods require a conversion from the http4s
 =.handler=
 
 #+BEGIN_SRC scala
-import JsonClient.Error
-
-final class BlazeJsonClient[F[_]] private (H: Client[IO])(
-  implicit
-  F: MonadError[F, Error],
-  I: LiftIO[F, Throwable]
+final class BlazeJsonClient[F[_]] private (H: Client[F])(
+  implicit F: Effect[F]
 ) extends JsonClient[F] {
   ...
-  def handler[A: JsDecoder](resp: http4s.Response[IO]): IO[Either[Error, A]] = {
+  private[this] def handler[A: JsDecoder](
+    resp: http4s.Response[F]
+  ): F[Either[JsonClient.Error, A]] =
     if (!resp.status.isSuccess)
-      IO.now(Left(JsonClient.ServerError(resp.status.code)))
+      F.pure(Left(JsonClient.ServerError(resp.status.code)))
     else
       for {
         text <- resp.body.through(fs2.text.utf8Decode).compile.foldMonoid
@@ -11245,14 +11237,13 @@ final class BlazeJsonClient[F[_]] private (H: Client[IO])(
           .flatMap(_.as[A])
           .leftMap(JsonClient.DecodingError(_))
       } yield res
-  }
 }
 #+END_SRC
 
-The =.through(fs2.text.utf8Decode)= is to convert a =Stream[IO, Byte]= into a
-=Stream[IO, String]=, with =.compile.foldMonoid= interpreting it with our
-=IO= and combining all the parts using the =Monoid[String]=, giving us a
-=IO[String]=.
+The =.through(fs2.text.utf8Decode)= is to convert a =Stream[F, Byte]= into a
+=Stream[F, String]=, with =.compile.foldMonoid= interpreting it with
+=Effect= and combining all the parts using the =Monoid[String]=, giving us a
+=F[String]=.
 
 We then parse the string as JSON and use the =JsDecoder[A]= to create the
 required output.
@@ -11262,66 +11253,30 @@ This is our implementation of =.get=
 #+BEGIN_SRC scala
   def get[A: JsDecoder](
     uri: String Refined Url,
-    headers: IList[(String, String)]
+    headers: List[(String, String)]
   ): F[A] =
-    I.liftIO(
-        H.fetch(
-          http4s.Request[IO](
-            uri = convert(uri),
-            headers = convert(headers)
-          )
-        )(handler[A])
-      )
-      .emap(identity)
+      H.fetch(http4s.Request[F](uri = convert(uri),
+                                headers = convert(headers)))
+             (handler[A]).flatMap(F.fromEither)
 #+END_SRC
 
 =.get= is all plumbing: we convert our input types into the =http4s.Request=,
 then call =.fetch= on the =Client= with our =handler=. This gives us back a
-=IO[Error \/ A]=, but we need to return a =F[A]=. Therefore we use the
-=LiftIO.liftIO= to create a =F[Error \/ A]= and then =.emap= to push the error
-into the =F=.
-
-Unfortunately, if we try to compile this code it will fail. The error will look
-something like
-
-#+BEGIN_SRC
-[error] BlazeJsonClient.scala:95:64: could not find implicit value for parameter
-[error]  F: cats.effect.Sync[scalaz.ioeffect.IO]
-#+END_SRC
-
-Basically, something about a missing cat.
-
-The reason for this failure is that http4s is using a different core FP library,
-not Scalaz. Thankfully, =scalaz-ioeffect= provides a compatibility layer and the
-[[https://github.com/djspiewak/shims][shims]] project provides seamless (until it isn't) implicit conversions. We can
-get our code to compile with these dependencies:
-
-#+BEGIN_SRC scala
-libraryDependencies ++= Seq(
-  "com.codecommit" %% "shims"                % "1.4.0",
-  "org.scalaz"     %% "scalaz-ioeffect-cats" % "2.10.1"
-)
-#+END_SRC
-
-and these imports
-
-#+BEGIN_SRC scala
-import shims._
-import scalaz.ioeffect.catz._
-#+END_SRC
+=F[Either[Error, A]]=, but we need to return a =F[A]=. Therefore we use the
+=MonadError.fromEither= to push the error into the =F=.
 
 The implementation of =.post= is similar but we must also provide an instance of
 
 #+BEGIN_SRC scala
-EntityEncoder[IO, String Refined UrlEncoded]
+EntityEncoder[F, String Refined UrlEncoded]
 #+END_SRC
 
 Thankfully, the =EntityEncoder= typeclass provides conveniences to let us derive
 one from the existing =String= encoder
 
 #+BEGIN_SRC scala
-  implicit val encoder: EntityEncoder[IO, String Refined UrlEncoded] =
-    EntityEncoder[IO, String]
+  private implicit val encoder: EntityEncoder[F, String Refined UrlEncoded] =
+    EntityEncoder[F, String]
       .contramap[String Refined UrlEncoded](_.value)
       .withContentType(
         `Content-Type`(MediaType.`application/x-www-form-urlencoded`)
@@ -11344,11 +11299,7 @@ with a configuration object
 
 #+BEGIN_SRC scala
 object BlazeJsonClient {
-  def apply[F[_]](
-    implicit
-    F: MonadError[F, JsonClient.Error],
-    I: LiftIO[F, Throwable]
-  ): IO[JsonClient[F]] =
+  def apply[F[_]: Effect]: F[JsonClient[F]] =
     Http1Client(BlazeClientConfig.defaultConfig).map(new BlazeJsonClient(_))
 }
 #+END_SRC
@@ -11378,25 +11329,25 @@ similar to any of other HTTP DSLs
 
 #+BEGIN_SRC scala
   private object Code extends QueryParamDecoderMatcher[String]("code")
-  private val service: HttpService[IO] = HttpService[IO] {
+  private val service: HttpService[F] = HttpService[F] {
     case GET -> Root :? Code(code) => ...
   }
 #+END_SRC
 
-The return type of each pattern match is a =IO[Response[IO]]=. In our
+The return type of each pattern match is a =F[Response[IO]]=. In our
 implementation we want to take the =code= and put it into the =ptoken= promise:
 
 #+BEGIN_SRC scala
-final class BlazeUserInteraction private (
-  pserver: Promise[Throwable, Server[IO]],
-  ptoken: Promise[Throwable, String]
-) extends UserInteraction[IO] {
+final class BlazeUserInteraction[F[_]: Effect] private (
+  S: Sleep[F],
+  pserver: Deferred[F, Server[F]],
+  ptoken: Deferred[F, String]
+) extends UserInteraction[F] {
   ...
-  private val service: HttpService[IO] = HttpService[IO] {
+  private val service: HttpService[F] = HttpService[F] {
     case GET -> Root :? Code(code) =>
-      ptoken.complete(code) >> Ok(
-        "That seems to have worked, go back to the console."
-      )
+      ptoken.complete(code) >>
+        Ok("That seems to have worked, go back to the console.")
   }
   ...
 }
@@ -11406,61 +11357,55 @@ but the definition of our services routes is not enough, we need to launch a
 server, which we do with =BlazeBuilder=
 
 #+BEGIN_SRC scala
-  private val launch: IO[Server[IO]] =
-    BlazeBuilder[IO].bindHttp(0, "localhost").mountService(service, "/").start
+  private val launch: F[Server[F]] =
+    BlazeBuilder[F].bindHttp(0, "localhost").mountService(service, "/").start
 #+END_SRC
 
 Binding to port =0= makes the operating system assign an ephemeral port. We can
 discover which port it is actually running on by querying the =server.address=
 field.
 
-Our implementation of the =.start= and =.stop= methods is now straightforward
+Our implementation of the =.start=, =.stop= and =.open= methods is now straightforward
 
 #+BEGIN_SRC scala
-  def start: IO[String Refined Url] =
+  def start: F[String Refined Url] =
     for {
       server  <- launch
-      updated <- pserver.complete(server)
-      _ <- if (updated) IO.unit
-           else server.shutdown *> fail("server was already running")
+      _ <- pserver.complete(server)
     } yield mkUrl(server)
 
-  def stop: IO[CodeToken] =
+  def stop: F[CodeToken] =
     for {
       server <- pserver.get
       token  <- ptoken.get
-      _      <- IO.sleep(1.second) *> server.shutdown
+      _      <- S.sleep(1.second) *> server.shutdown
     } yield CodeToken(token, mkUrl(server))
 
-  private def mkUrl(s: Server[IO]): String Refined Url = {
+  def open(url: String Refined Url): F[Unit] = Effect[F].liftIO(Browser.open(url))
+
+  private def mkUrl(s: Server[F]): String Refined Url = {
     val port = s.address.getPort
     Refined.unsafeApply(s"http://localhost:${port}/")
   }
-  private def fail[A](s: String): String =
-    IO.fail(new IOException(s) with NoStackTrace)
 #+END_SRC
 
 The =1.second= sleep is necessary to avoid shutting down the server before the
 response is sent back to the browser. IO doesn't mess around when it comes to
 concurrency performance!
 
-Finally, to create a =BlazeUserInteraction=, we just need the two uninitialised
-promises
+Finally, to create a =BlazeUserInteraction=, we just need to ask for an
+implementation of =Sleep[F]= and create two uninitialised =Deferred= promises
 
 #+BEGIN_SRC scala
 object BlazeUserInteraction {
-  def apply(): IO[BlazeUserInteraction] = {
+  def apply[F[_]: ConcurrentEffect](S: Sleep[F]): F[BlazeUserInteraction[F]] = {
     for {
-      p1 <- Promise.make[Void, Server[IO]].widenError[Throwable]
-      p2 <- Promise.make[Void, String].widenError[Throwable]
-    } yield new BlazeUserInteraction(p1, p2)
+      p1 <- Deferred[F, Server[F]]
+      p2 <- Deferred[F, String]
+    } yield new BlazeUserInteraction(S, p1, p2)
   }
 }
 #+END_SRC
-
-We could use =IO[Void, ?]= instead, but since the rest of our application is
-using =IO= (i.e. =IO[Throwable, ?]=), we =.widenError= to avoid introducing
-any boilerplate that would distract us.
 
 *** Thank You
 
@@ -11470,7 +11415,7 @@ If you learnt something from this book, then please tell your friends. This book
 does not have a marketing department, so word of mouth is the only way that
 readers find out about it.
 
-Get involved with Scalaz by joining the [[https://gitter.im/scalaz/scalaz][gitter chat room]]. From there you can ask
+Get involved with Cats by joining the [[https://gitter.im/typelevel/cats][gitter chat room]]. From there you can ask
 for advice, help newcomers (you're an expert now), and contribute to the next
 release.
 
@@ -11482,50 +11427,41 @@ release.
 
 ** Typeclass Cheatsheet
 
-| Typeclass          | Method          | From            | Given                  | To             |
-|--------------------+-----------------+-----------------+------------------------+----------------|
-| ~Invariant~        | ~xmap~          | ~F[A]~          | ~A => B, B => A~       | ~F[B]~         |
-| ~Contravariant~    | ~contramap~     | ~F[A]~          | ~B => A~               | ~F[B]~         |
-| ~Functor~          | ~map~           | ~F[A]~          | ~A => B~               | ~F[B]~         |
-| ~Apply~            | ~ap~ / ~<*>~    | ~F[A]~          | ~F[A => B]~            | ~F[B]~         |
-|                    | ~map2~          | ~F[A], F[B]~    | ~(A, B) => C~          | ~F[C]~         |
-| ~Alt~              | ~altly2~        | ~F[A], F[B]~    | ~(A \/ B) => C~        | ~F[C]~         |
-| ~Divide~           | ~divide2~       | ~F[A], F[B]~    | ~C => (A, B)~          | ~F[C]~         |
-| ~Decidable~        | ~choose2~       | ~F[A], F[B]~    | ~C => (A \/ B)~        | ~F[C]~         |
-| ~Bind~             | ~bind~ / ~>>=~  | ~F[A]~          | ~A => F[B]~            | ~F[B]~         |
-|                    | ~join~          | ~F[F[A]]~       |                        | ~F[A]~         |
-| ~CoflatMap~        | ~coflatMap~     | ~F[A]~          | ~F[A] => B~            | ~F[B]~         |
-|                    | ~cojoin~        | ~F[A]~          |                        | ~F[F[A]]~      |
-| ~Applicative~      | ~point~         | ~A~             |                        | ~F[A]~         |
-| ~Divisible~        | ~conquer~       |                 |                        | ~F[A]~         |
-| ~Comonad~          | ~copoint~       | ~F[A]~          |                        | ~A~            |
-| ~Semigroup~        | ~append~        | ~A, A~          |                        | ~A~            |
-| ~Plus~             | ~plus~ / ~<+>~  | ~F[A], F[A]~    |                        | ~F[A]~         |
-| ~MonadPlus~        | ~withFilter~    | ~F[A]~          | ~A => Boolean~         | ~F[A]~         |
-| ~Align~            | ~align~         | ~F[A], F[B]~    |                        | ~F[A \&/ B]~   |
-|                    | ~merge~         | ~F[A], F[A]~    |                        | ~F[A]~         |
-| ~Zip~              | ~zip~           | ~F[A], F[B]~    |                        | ~F[(A, B)]~    |
-| ~Unzip~            | ~unzip~         | ~F[(A, B)]~     |                        | ~(F[A], F[B])~ |
-| ~Cozip~            | ~cozip~         | ~F[A \/ B]~     |                        | ~F[A] \/ F[B]~ |
-| ~Foldable~         | ~foldMap~       | ~F[A]~          | ~A => B~               | ~B~            |
-|                    | ~foldMapM~      | ~F[A]~          | ~A => G[B]~            | ~G[B]~         |
-| ~Traverse~         | ~traverse~      | ~F[A]~          | ~A => G[B]~            | ~G[F[B]]~      |
-|                    | ~sequence~      | ~F[G[A]]~       |                        | ~G[F[A]]~      |
-| ~Equal~            | ~equal~ / ~===~ | ~A, A~          |                        | ~Boolean~      |
-| ~Show~             | ~shows~         | ~A~             |                        | ~String~       |
-| ~Bifunctor~        | ~bimap~         | ~F[A, B]~       | ~A => C, B => D~       | ~F[C, D]~      |
-|                    | ~leftMap~       | ~F[A, B]~       | ~A => C~               | ~F[C, B]~      |
-|                    | ~rightMap~      | ~F[A, B]~       | ~B => C~               | ~F[A, C]~      |
-| ~Bifoldable~       | ~bifoldMap~     | ~F[A, B]~       | ~A => C, B => C~       | ~C~            |
-| (with ~MonadPlus~) | ~separate~      | ~F[G[A, B]]~    |                        | ~(F[A], F[B])~ |
-| ~Bitraverse~       | ~bitraverse~    | ~F[A, B]~       | ~A => G[C], B => G[D]~ | ~G[F[C, D]]~   |
-|                    | ~bisequence~    | ~F[G[A], G[B]]~ |                        | ~G[F[A, B]]~   |
-
-# https://emacs.stackexchange.com/questions/36029
+| Typeclass               | Method             | From            | Given                  | To             |
+|-------------------------+--------------------+-----------------+------------------------+----------------|
+| ~Invariant~             | ~imap~             | ~F[A]~          | ~A => B, B => A~       | ~F[B]~         |
+| ~Contravariant~         | ~contramap~        | ~F[A]~          | ~B => A~               | ~F[B]~         |
+| ~ContravariantMonoidal~ | ~contramap2~       | ~F[A], F[B]~    | ~C => (A, B)~          | ~F[C]~         |
+|                         | ~trivial~          |                 |                        | ~F[A]~         |
+| ~Functor~               | ~map~              | ~F[A]~          | ~A => B~               | ~F[B]~         |
+| ~Apply~                 | ~map2~             | ~F[A], F[B]~    | ~(A, B) => C~          | ~F[C]~         |
+| ~Semigroupal~           | ~product~          | ~F[A], F[B]~    |                        | ~F[(A, B)]~    |
+| ~Applicative~           | ~pure~             | ~A~             |                        | ~F[A]~         |
+| ~FlatMap~               | ~flatMap~ / ~>>=~  | ~F[A]~          | ~A => F[B]~            | ~F[B]~         |
+|                         | ~flatten~          | ~F[F[A]]~       |                        | ~F[A]~         |
+| ~CoflatMap~             | ~coflatMap~        | ~F[A]~          | ~F[A] => B~            | ~F[B]~         |
+|                         | ~coflatten~        | ~F[A]~          |                        | ~F[F[A]]~      |
+| ~Comonad~               | ~extract~          | ~F[A]~          |                        | ~A~            |
+| ~Semigroup~             | ~combine~          | ~A, A~          |                        | ~A~            |
+| ~SemigroupK~            | ~combineK~ / ~<+>~ | ~F[A], F[A]~    |                        | ~F[A]~         |
+| ~Alternative~           | ~unite~            | ~F[G[A]]~       |                        | ~F[A]~         |
+|                         | ~separate~         | ~F[G[A, B]]~    |                        | ~F[G[A, B]]~   |
+| ~Align~                 | ~align~            | ~F[A], F[B]~    |                        | ~F[Ior[A, B]]~ |
+| ~Foldable~              | ~foldMap~          | ~F[A]~          | ~A => B~               | ~B~            |
+|                         | ~foldMapM~         | ~F[A]~          | ~A => G[B]~            | ~G[B]~         |
+| ~Traverse~              | ~traverse~         | ~F[A]~          | ~A => G[B]~            | ~G[F[B]]~      |
+|                         | ~sequence~         | ~F[G[A]]~       |                        | ~G[F[A]]~      |
+| ~Eq~                    | ~eqv~ / ~===~      | ~A, A~          |                        | ~Boolean~      |
+| ~Show~                  | ~show~             | ~A~             |                        | ~String~       |
+| ~Bifunctor~             | ~bimap~            | ~F[A, B]~       | ~A => C, B => D~       | ~F[C, D]~      |
+|                         | ~leftMap~          | ~F[A, B]~       | ~A => C~               | ~F[C, B]~      |
+| ~Bifoldable~            | ~bifoldMap~        | ~F[A, B]~       | ~A => C, B => C~       | ~C~            |
+| ~Bitraverse~            | ~bitraverse~       | ~F[A, B]~       | ~A => G[C], B => G[D]~ | ~G[F[C, D]]~   |
+|                         | ~bisequence~       | ~F[G[A], G[B]]~ |                        | ~G[F[A, B]]~   |
 
 ** Haskell
 
-Scalaz documentation often cites libraries or papers written in the Haskell
+Cats documentation often cites libraries or papers written in the Haskell
 programming language. In this short chapter, we will learn enough Haskell to be
 able to understand the source material, and to attend Haskell talks at
 functional programming conferences.
@@ -11562,8 +11498,8 @@ object Cons {
 
 i.e. the type constructor is like =sealed abstract class=, and each data
 constructor is =.apply= / =.unapply=. Note that Scala does not perform
-exhaustive pattern matches on this encoding, which is why Scalaz does not use
-it.
+exhaustive pattern matches on this encoding, which is why Cats does not use
+this encoding.
 
 We can use infix, a nicer definition might use the symbol =:.= instead of =Cons=
 
@@ -11601,7 +11537,7 @@ data types are:
 - =Float= / =Double= IEEE single and double precision numbers
 - =Integer= / =Natural= arbitrary precision signed / non-negative integers
 - =(,)= tuples, from 0 (also known as /unit/) to 62 fields
-- =IO= the inspiration for Scalaz's =IO=, implemented in the runtime.
+- =IO= the inspiration for Cats' =IO=, implemented in the runtime.
 
 with honorary mentions for
 
@@ -11939,7 +11875,7 @@ instance Monad List where
 #+END_SRC
 
 If we have a typeclass constraint in a function, we use the same ~=>~ notation.
-For example we can define something similar to Scalaz's =Apply.apply2=
+For example we can define something similar to Cats' =Apply.map2=
 
 #+BEGIN_SRC haskell
 apply2 :: Applicative f => (a -> b -> c) -> f a -> f b -> f c
@@ -12007,8 +11943,8 @@ nameReturn = do putStr "What is your first name? "
                 pure full
 #+END_SRC
 
-Finally, Haskell has typeclass derivation with the =deriving= keyword, the
-inspiration for =@scalaz.deriving=. Defining the derivation rules is an advanced
+Finally, Haskell has typeclass derivation with the =deriving= keyword.
+Defining the derivation rules is an advanced
 topic, but it is easy to derive a typeclass for an ADT:
 
 #+BEGIN_SRC haskell
@@ -12024,8 +11960,7 @@ explicit parameters. There is no language-level support in Haskell for algebras:
 they are just data!
 
 #+BEGIN_ASIDE
-/Algebra/ is the somewhat confused Scala name for this concept: in Haskell it's
-called a /record of functions/. Because it's just a record. Of functions.
+What we call an /algebra/ in Scala is called a /record of functions/ in Haskell.
 #+END_ASIDE
 
 Consider =Console= from the introduction. We can rewrite it into Haskell:
@@ -12046,8 +11981,8 @@ echo c = do line <- readln c
 #+END_SRC
 
 A production implementation of =Console= would likely have type =Console IO=.
-The Scalaz =liftIO= function is inspired by a Haskell function of the same name
-and can lift =Console IO= into any Advanced Monad stack.
+The Cats =.liftIO= function is inspired by a Haskell function of the same name
+and can lift =Console IO= into any Monad stack.
 
 Two additional language extensions make the business logic even cleaner. For
 example, =RecordWildCards= allows us to import all the fields of a data type by
@@ -12069,9 +12004,7 @@ echo Console{readln, println} = do line <- readln
 #+END_SRC
 
 Whereas in Scala this encoding may be called /Finally Tagless/, in Haskell it is
-known as /MTL style with records of functions/. Without going into details, some
-Scala developers didn't understand a research paper about the performance
-benefits of [[http://okmij.org/ftp/tagless-final/index.html#tagless-final][Generalised ADTs in Haskell]].
+known as /MTL style with records of functions/.
 
 An alternative to MTL style are /Extensible Effects/, also known as [[http://okmij.org/ftp/Haskell/extensible/more.pdf][Free Monad
 style]].
@@ -12289,7 +12222,6 @@ Some additional learning materials are:
 - [[http://shop.oreilly.com/product/0636920026365.do][Parallel and Concurrent Programming in Haskell]] and [[http://dev.stephendiehl.com/hask/#data-kinds][What I Wish I Knew When
   Learning Haskell]] for intermediate wisdom.
 - [[https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/][Glasgow Haskell Compiler User Guide]] and [[https://wiki.haskell.org][HaskellWiki]] for the cold hard facts.
-- [[https://eta-lang.org/][Eta]], i.e. Haskell for the JVM.
 
 If you enjoy using Haskell and understand the value that it would bring to your
 business, then tell your managers! That way, the small percentage of managers
@@ -12336,27 +12268,45 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #+END_SRC
 
-*** Scalaz License
+*** Cats License
 
 #+BEGIN_SRC
+Cats Copyright (c) 2015 Cats Contributors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------
+
 Copyright (c) 2009-2014 Tony Morris, Runar Bjarnason, Tom Adams,
-                        Kristian Domagala, Brad Clow, Ricky Clarkson,
-                        Paul Chiusano, Trygve Laugstøl, Nick Partridge,
-                        Jason Zaugg
-All rights reserved.
+Kristian Domagala, Brad Clow, Ricky Clarkson, Paul Chiusano, Trygve
+Laugstøl, Nick Partridge, Jason Zaugg. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions
 are met:
-
 1. Redistributions of source code must retain the above copyright
    notice, this list of conditions and the following disclaimer.
 2. Redistributions in binary form must reproduce the above copyright
    notice, this list of conditions and the following disclaimer in the
    documentation and/or other materials provided with the distribution.
-3. Neither the name of the copyright holder nor the names of
-   its contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
 IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES

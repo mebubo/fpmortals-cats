@@ -70,7 +70,6 @@ object Monkeys {
 
 final class AlgebraSpec extends Test {
 
-  // https://github.com/scalaz/scalaz/pull/1753
   def or[F[_], G[_], H[_]](fg: F ~> G, hg: H ~> G): EitherK[F, H, ?] ~> G =
     λ[EitherK[F, H, ?] ~> G](_.fold(fg, hg))
 

@@ -80,7 +80,7 @@ final class BlazeJsonClient[F[_]] private (H: Client[F])(
     resp: http4s.Response[F]
   ): F[Either[JsonClient.Error, A]] =
     if (!resp.status.isSuccess)
-      F.pure(Left(JsonClient.ServerError(resp.status.code)): Either[JsonClient.Error, A])
+      F.pure(Left(JsonClient.ServerError(resp.status.code)))
     else
       for {
         text <- resp.body.through(fs2.text.utf8Decode).compile.foldMonoid
