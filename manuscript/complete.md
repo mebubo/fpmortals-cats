@@ -7728,6 +7728,12 @@ It is considered good practice to prefer typeclasses instead of directly using
 is a very active area of research for the community, we would not want to miss
 out on future improvements by limiting ourselves to today's implementation!
 
+There is one caveat to using the typeclasses: `Sync` sets the error type to
+`Throwable`. If a custom error type is required, it is recommended to use the
+`IO` type directly instead of the typeclasses, and capture the business domain
+error with an `EitherT`, the underlying `Throwable` errors are still accessible
+on the `IO`.
+
 
 ### Concurrency
 
@@ -9965,5 +9971,423 @@ There is no need to write derivation rules for Cats core typeclasses: the
 Manual instances are always an escape hatch for special cases and to achieve the
 ultimate performance. Avoid introducing typo bugs with manual instances by using
 a code generation tool.
+
+
+# Wiring up the Application
+
+To finish, we will apply what we have learnt to wire up the example application,
+and implement an HTTP client and server using the [http4s](https://http4s.org/) pure FP library.
+
+The source code to the `drone-dynamic-agents` application is available along
+with the book's source code at `https://github.com/turt13/fpmortals-cats` under the
+`examples` folder. It is not necessary to be at a computer to read this chapter,
+but many readers may prefer to explore the codebase in addition to this text.
+
+Some parts of the application have been left unimplemented, as an exercise to
+the reader.
+
+
+## Overview
+
+Our main application only requires an implementation of the `DynAgents` algebra.
+
+{lang="text"}
+~~~~~~~~
+  trait DynAgents[F[_]] {
+    def initial: F[WorldView]
+    def update(old: WorldView): F[WorldView]
+    def act(world: WorldView): F[WorldView]
+  }
+~~~~~~~~
+
+We have an implementation already, `DynAgentsModule`, which requires
+implementations of the `Drone` and `Machines` algebras, which require a
+`JsonClient`, `LocalClock` and OAuth2 algebras, etc, etc, etc.
+
+It is helpful to get a complete picture of all the algebras, modules and
+interpreters of the application. This is the layout of the source code:
+
+{lang="text"}
+~~~~~~~~
+  ├── dda
+  │   ├── algebra.scala
+  │   ├── DynAgents.scala
+  │   ├── main.scala
+  │   └── interpreters
+  │       ├── DroneModule.scala
+  │       └── GoogleMachinesModule.scala
+  ├── http
+  │   ├── JsonClient.scala
+  │   ├── OAuth2JsonClient.scala
+  │   ├── encoding
+  │   │   ├── UrlEncoded.scala
+  │   │   ├── UrlEncodedWriter.scala
+  │   │   ├── UrlQuery.scala
+  │   │   └── UrlQueryWriter.scala
+  │   ├── oauth2
+  │   │   ├── Access.scala
+  │   │   ├── Auth.scala
+  │   │   ├── Refresh.scala
+  │   │   └── interpreters
+  │   │       └── BlazeUserInteraction.scala
+  │   └── interpreters
+  │       └── BlazeJsonClient.scala
+  ├── os
+  │   └── Browser.scala
+  └── time
+      ├── Epoch.scala
+      ├── LocalClock.scala
+      └── Sleep.scala
+~~~~~~~~
+
+The signatures of all the algebras can be summarised as
+
+{lang="text"}
+~~~~~~~~
+  trait Sleep[F[_]] {
+    def sleep(time: FiniteDuration): F[Unit]
+  }
+  
+  trait LocalClock[F[_]] {
+    def now: F[Epoch]
+  }
+  
+  trait JsonClient[F[_]] {
+    def get[A: JsDecoder](
+      uri: String Refined Url,
+      headers: List[(String, String)]
+    ): F[A]
+  
+    def post[P: UrlEncodedWriter, A: JsDecoder](
+      uri: String Refined Url,
+      payload: P,
+      headers: List[(String, String)]
+    ): F[A]
+  }
+  
+  trait Auth[F[_]] {
+    def authenticate: F[CodeToken]
+  }
+  trait Access[F[_]] {
+    def access(code: CodeToken): F[(RefreshToken, BearerToken)]
+  }
+  trait Refresh[F[_]] {
+    def bearer(refresh: RefreshToken): F[BearerToken]
+  }
+  trait OAuth2JsonClient[F[_]] {
+    // same methods as JsonClient, but doing OAuth2 transparently
+  }
+  
+  trait UserInteraction[F[_]] {
+    def start: F[String Refined Url]
+    def open(uri: String Refined Url): F[Unit]
+    def stop: F[CodeToken]
+  }
+  
+  trait Drone[F[_]] {
+    def getBacklog: F[Int]
+    def getAgents: F[Int]
+  }
+  
+  trait Machines[F[_]] {
+    def getTime: F[Epoch]
+    def getManaged: F[NonEmptyList[MachineNode]]
+    def getAlive: F[Map[MachineNode, Epoch]]
+    def start(node: MachineNode): F[Unit]
+    def stop(node: MachineNode): F[Unit]
+  }
+~~~~~~~~
+
+The data types are:
+
+{lang="text"}
+~~~~~~~~
+  final case class Epoch(millis: Long) extends AnyVal
+  final case class MachineNode(id: String)
+  final case class CodeToken(token: String, redirect_uri: String Refined Url)
+  final case class RefreshToken(token: String) extends AnyVal
+  final case class BearerToken(token: String, expires: Epoch)
+  final case class OAuth2Config(token: RefreshToken, server: ServerConfig)
+  final case class AppConfig(drone: BearerToken, machines: OAuth2Config)
+  final case class UrlQuery(params: List[(String, String)]) extends AnyVal
+~~~~~~~~
+
+and the typeclasses are
+
+{lang="text"}
+~~~~~~~~
+  @typeclass trait UrlEncodedWriter[A] {
+    def toUrlEncoded(a: A): String Refined UrlEncoded
+  }
+  @typeclass trait UrlQueryWriter[A] {
+    def toUrlQuery(a: A): UrlQuery
+  }
+~~~~~~~~
+
+And without going into the detail of how to implement the algebras, we need to
+know the dependency graph of our `DynAgentsModule`.
+
+{lang="text"}
+~~~~~~~~
+  final class DynAgentsModule[F[_]: Applicative](
+    D: Drone[F],
+    M: Machines[F]
+  ) extends DynAgents[F] { ... }
+  
+  final class DroneModule[F[_]](
+    H: OAuth2JsonClient[F]
+  ) extends Drone[F] { ... }
+  
+  final class GoogleMachinesModule[F[_]](
+    H: OAuth2JsonClient[F]
+  ) extends Machines[F] { ... }
+~~~~~~~~
+
+There are two modules implementing `OAuth2JsonClient`, one that will use the OAuth2 `Refresh` algebra (for Google) and another that reuses a non-expiring `BearerToken` (for Drone).
+
+{lang="text"}
+~~~~~~~~
+  final class OAuth2JsonClientModule[F[_]](
+    token: RefreshToken
+  )(
+    H: JsonClient[F],
+    T: LocalClock[F],
+    A: Refresh[F]
+  )(
+    implicit F: MonadState[F, BearerToken]
+  ) extends OAuth2JsonClient[F] { ... }
+  
+  final class BearerJsonClientModule[F[_]: Monad](
+    bearer: BearerToken
+  )(
+    H: JsonClient[F]
+  ) extends OAuth2JsonClient[F] { ... }
+~~~~~~~~
+
+So far we have seen requirements for `F` to have an `Applicative[F]`, `Monad[F]`
+and `MonadState[F, BearerToken]`. All of these requirements can be satisfied by
+using `StateT[IO, BearerToken, ?]` as our application's context.
+
+However, some of our algebras only have one interpreter, using `IO`
+
+{lang="text"}
+~~~~~~~~
+  final class LocalClockIO extends LocalClock[IO] { ... }
+  final class SleepIO extends Sleep[IO] { ... }
+~~~~~~~~
+
+But recall that our algebras shoud provide a `.mapK`, see Chapter 7.4 on the
+Monad Transformer Library, allowing us to lift a `LocalClock[IO]` into our
+desired `StateT[IO, BearerToken, ?]` context, and everything is consistent.
+Alternatively, we could have written these interpreters to use `Effect`.
+
+Our `BlazeJsonClient` is abstracted over `Effect`, using `Throwable` as the
+error type. When we defined `JsonClient.Error` we extended `Throwable` for this
+reason. Since the underlying library `fs2` is coupled to `Effect` it is not
+possible to use a custom error type, because we cannot add another `MonadError`
+on top of an `Effect`.
+
+{lang="text"}
+~~~~~~~~
+  final class BlazeJsonClient[F[_]: Effect] ... extends JsonClient[F] {
+    ...
+  }
+  object BlazeJsonClient {
+    def apply[F[_]: Effect]: F[JsonClient[F]] = ...
+  }
+~~~~~~~~
+
+`OAuth2JsonClientModule` requires a `MonadState` and `BlazeJsonClient` requires
+`Effect`. Our application's context will now likely be a `StateT[IO,
+BearerToken, ?]`.
+
+We must not forget that we need to provide a `RefreshToken` for
+`GoogleMachinesModule`. We could ask the user to do all the legwork, but we are
+nice and provide a separate one-shot application that uses the `Auth` and
+`Access` algebras. The `AuthModule` and `AccessModule` implementations bring in
+additional dependencies, but thankfully no change to the application's `F[_]`
+context.
+
+{lang="text"}
+~~~~~~~~
+  final class AuthModule[F[_]: Monad](
+    config: ServerConfig
+  )(
+    I: UserInteraction[F]
+  ) extends Auth[F] { ... }
+  
+  final class AccessModule[F[_]: Monad](
+    config: ServerConfig
+  )(
+    H: JsonClient[F],
+    T: LocalClock[F]
+  ) extends Access[F] { ... }
+  
+  final class BlazeUserInteraction[F[_]: Effect] private (
+    S: Sleep[F],
+    pserver: Deferred[F, Server[F]],
+    ptoken: Deferred[F, String]
+  ) extends UserInteraction[IO] { ... }
+  object BlazeUserInteraction {
+    def apply[F[_]: ConcurrentEffect](S: Sleep[F]): F[BlazeUserInteraction[F]] = ...
+  }
+~~~~~~~~
+
+The interpreter for `UserInteraction` is the most complex part of our codebase:
+it starts an HTTP server, sends the user to visit a webpage in their browser,
+captures a callback in the server, and then returns the result while safely
+shutting down the web server.
+
+Rather than using a `StateT` to manage this state, we use a `Deferred` primitive.
+We should always use `Deferred` (or `MVar`) instead of a
+`StateT` when we are writing an `IO` interpreter since it allows us to restrict
+the mutability to inside the implementation. If we were to use a `StateT`, not only would it have a
+performance impact on the entire application, but it would also leak internal
+state management to the main application, which would become responsible for
+providing the initial value. We also couldn't use `StateT` in this scenario
+because we need "wait for" semantics that are only provided by `Deferred`.
+
+
+## `Main`
+
+Making sure that monads are all aligned tends
+to happen in the `Main` entrypoint.
+
+Our main loop is
+
+{lang="text"}
+~~~~~~~~
+  state = initial()
+  while True:
+    state = update(state)
+    state = act(state)
+~~~~~~~~
+
+and the good news is that the actual code will look like
+
+{lang="text"}
+~~~~~~~~
+  for {
+    old     <- F.get
+    updated <- A.update(old)
+    changed <- A.act(updated)
+    _       <- F.put(changed)
+    _       <- S.sleep(10.seconds)
+  } yield ()
+~~~~~~~~
+
+where `F` holds the state of the world in a `MonadState[F, WorldView]`. We can
+put this into a method called `.step` and repeat it forever by calling
+`.step[F].forever[Unit]`.
+
+Thankfully, the code we want to write for the one-shot authentication mode is
+all compatible with the same monadic context, `IO`
+
+{lang="text"}
+~~~~~~~~
+  def auth(name: String): IO[Unit] = {
+    for {
+      config    <- readConfig[ServerConfig](name + ".server")
+      sleeper   = new SleepIO
+      ui        <- BlazeUserInteraction(sleeper)
+      auth      = new AuthModule(config)(ui)
+      codetoken <- auth.authenticate
+      clock     = new LocalClockIO
+      client    <- BlazeJsonClient[IO]
+      access    = new AccessModule(config)(client, clock)
+      token     <- access.access(codetoken)
+      _         <- putStrLn(s"got token: ${token._1}")
+    } yield ()
+  }
+~~~~~~~~
+
+where `.readConfig` and `.putStrLn` are library calls. We can think of them as
+`IO` interpreters of algebras that read the application's runtime
+configuration and print a string to the screen.
+
+However, the monads for the `.agents` loop do not align.
+If we perform an analysis we find that the following are needed:
+
+-   `MonadError[F, Throwable]` for uses of the `JsonClient`
+-   `MonadState[F, BearerToken]` for uses of the `OAuth2JsonClient`
+-   `MonadState[F, WorldView]` for our main loop
+
+Unfortunately, the two `MonadState` requirements are in conflict. We could
+construct a data type that captures all the state of the program, but that is a
+leaky abstraction. Instead, we nest our `for` comprehensions and provide state
+where it is needed.
+
+We now need to think about our three layers, which we can refer to as the
+"outer", "middle" and "inner" layers:
+
+{lang="text"}
+~~~~~~~~
+  type Outer[a] = IO[a]
+  type Middle[a] = StateT[IO, BearerToken, a]
+  type Inner[a] = StateT[Middle, WorldView, a]
+~~~~~~~~
+
+The main application can be written as
+
+{lang="text"}
+~~~~~~~~
+  def agents(bearer: BearerToken): IO[Unit] = for {
+    config  <- readConfig[AppConfig]("application.conf")
+    blazeIO <- BlazeJsonClient[IO]
+    blaze = blazeIO.mapK[Middle](liftIoK)
+    _ <- {
+      val bearerClient = new BearerJsonClientModule[Middle](bearer)(blaze)
+      val drone        = new DroneModule[Middle](bearerClient)
+      val clock        = (new LocalClockIO).mapK[Middle](liftIoK)
+      val refresh      = new RefreshModule[Middle](config.machines.server)(blaze, clock)
+      val oauthClient =
+        new OAuth2JsonClientModule[Middle](config.machines.token)(blaze, clock, refresh)
+      val machines = new GoogleMachinesModule[Middle](oauthClient)
+      val agents   = new DynAgentsModule[Middle](drone, machines)
+      for {
+        start <- agents.initial
+        sleeper = (new SleepIO).mapK[Inner](liftIoK)
+        fagents = agents.mapK[Inner](StateT.liftK)
+        _ <- step(fagents, sleeper).foreverM[Unit].runA(start)
+      } yield ()
+    }.runA(bearer)
+  } yield ()
+~~~~~~~~
+
+The two calls to `.runA` are where we provide the initial
+state for the `StateT` parts of our application.
+
+We can call these two application entry points from our `IOApp`
+
+{lang="text"}
+~~~~~~~~
+  def run(args: List[String]): IO[ExitCode] = {
+    if (args.contains("--machines")) auth("machines")
+    else agents(BearerToken("<invalid>", Epoch(0)))
+  }.attempt.map {
+    case Right(_)  => ExitCode.Success
+    case Left(err) => ExitCode.Error
+  }
+~~~~~~~~
+
+and then run it!
+
+{lang="text"}
+~~~~~~~~
+  > runMain fpmortals.dda.Main --machines
+  [info] Running (fork) fpmortals.dda.Main --machines
+  ...
+  [info] Service bound to address /127.0.0.1:46687
+  ...
+  [info] Created new window in existing browser session.
+  ...
+  [info] Headers(Host: localhost:46687, Connection: keep-alive, User-Agent: Mozilla/5.0 ...)
+  ...
+  [info] POST https://www.googleapis.com/oauth2/v4/token
+  ...
+  [info] got token: "<elided>"
+~~~~~~~~
+
+Yay!
 
 

@@ -6,5 +6,4 @@ introduction.md
 
 complete.md
 
-incomplete.md
 

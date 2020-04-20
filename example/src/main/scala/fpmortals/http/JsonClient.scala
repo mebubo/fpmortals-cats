@@ -18,7 +18,7 @@ import http.encoding._
  * An algebra for issuing basic GET / POST requests to a web server that returns
  * JSON. Errors are captured in the `F[_]`.
  */
-trait JsonClient[F[_]] {
+trait JsonClient[F[_]] { self =>
 
   def get[A: JsDecoder](
     uri: String Refined Url,
@@ -32,6 +32,18 @@ trait JsonClient[F[_]] {
     headers: List[(String, String)]
   ): F[A]
 
+  def mapK[G[_]](f: F ~> G): JsonClient[G] = new JsonClient[G] {
+    def get[A: JsDecoder](
+      uri: String Refined Url,
+      headers: List[(String, String)]
+    ): G[A] = f(self.get(uri, headers))
+
+    def post[P: UrlEncodedWriter, A: JsDecoder](
+      uri: String Refined Url,
+      payload: P,
+      headers: List[(String, String)]
+    ): G[A] = f(self.post(uri, payload, headers))
+  }
 }
 object JsonClient {
   sealed abstract class Error extends Throwable with NoStackTrace

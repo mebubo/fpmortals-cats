@@ -15,6 +15,6 @@ trait LocalClock[F[_]] { self =>
   }
 }
 
-final class LocalClockTask extends LocalClock[IO] {
+final class LocalClockIO extends LocalClock[IO] {
   def now: IO[Epoch] = Epoch.now
 }

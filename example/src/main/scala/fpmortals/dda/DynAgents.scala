@@ -35,12 +35,17 @@ final case class WorldView(
   time: Epoch
 )
 
-trait DynAgents[F[_]] {
+trait DynAgents[F[_]] { self =>
   def initial: F[WorldView]
   def update(old: WorldView): F[WorldView]
   def act(world: WorldView): F[WorldView]
+
+  def mapK[G[_]](f: F ~> G): DynAgents[G] = new DynAgents[G] {
+    def initial: G[WorldView] = f(self.initial)
+    def update(old: WorldView): G[WorldView] = f(self.update(old))
+    def act(world: WorldView): G[WorldView] = f(self.act(world))
+  }
 }
-object DynAgents extends DynAgentsBoilerplate
 
 final class DynAgentsModule[F[_]: Applicative](D: Drone[F], M: Machines[F])
     extends DynAgents[F] {

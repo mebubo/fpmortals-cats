@@ -8574,6 +8574,12 @@ It is considered good practice to prefer typeclasses instead of directly using
 is a very active area of research for the community, we would not want to miss
 out on future improvements by limiting ourselves to today's implementation!
 
+There is one caveat to using the typeclasses: =Sync= sets the error type to
+=Throwable=. If a custom error type is required, it is recommended to use the
+=IO= type directly instead of the typeclasses, and capture the business domain
+error with an =EitherT=, the underlying =Throwable= errors are still accessible
+on the =IO=.
+
 **** Concurrency
 
 Cats effect provides several components that are useful for concurrent
@@ -10709,11 +10715,6 @@ Manual instances are always an escape hatch for special cases and to achieve the
 ultimate performance. Avoid introducing typo bugs with manual instances by using
 a code generation tool.
 
-* Incomplete                                                          :final:
-  :PROPERTIES:
-  :EXPORT_FILE_NAME: incomplete.md
-  :END:
-
 ** Wiring up the Application
 
 To finish, we will apply what we have learnt to wire up the example application,
@@ -10908,49 +10909,29 @@ final class LocalClockIO extends LocalClock[IO] { ... }
 final class SleepIO extends Sleep[IO] { ... }
 #+END_SRC
 
-But recall that our algebras shoud provide a =.mapK=, see
-Chapter 7.4 on the Monad Transformer Library, allowing us to lift a
-=LocalClock[IO]= into our desired =StateT[IO, BearerToken, ?]= context, and
-everything is consistent.
+But recall that our algebras shoud provide a =.mapK=, see Chapter 7.4 on the
+Monad Transformer Library, allowing us to lift a =LocalClock[IO]= into our
+desired =StateT[IO, BearerToken, ?]= context, and everything is consistent.
+Alternatively, we could have written these interpreters to use =Effect=.
 
-Unfortunately, that is not the end of the story. Things get more complicated
-when we go to the next layer. Our =JsonClient= has an interpreter using a
-different context
+Our =BlazeJsonClient= is abstracted over =Effect=, using =Throwable= as the
+error type. When we defined =JsonClient.Error= we extended =Throwable= for this
+reason. Since the underlying library =fs2= is coupled to =Effect= it is not
+possible to use a custom error type, because we cannot add another =MonadError=
+on top of an =Effect=.
 
 #+BEGIN_SRC scala
-final class BlazeJsonClient[F[_]](H: Client[IO])(
-  implicit
-  F: MonadError[F, JsonClient.Error],
-  I: LiftIO[F, Throwable]
-) extends JsonClient[F] { ... }
+final class BlazeJsonClient[F[_]: Effect] ... extends JsonClient[F] {
+  ...
+}
 object BlazeJsonClient {
-  def apply[F[_]](
-    implicit
-    F: MonadError[F, JsonClient.Error],
-    I: LiftIO[F, Throwable]
-  ): IO[JsonClient[F]] = ...
+  def apply[F[_]: Effect]: F[JsonClient[F]] = ...
 }
 #+END_SRC
 
-Note that the =BlazeJsonClient= constructor returns a =IO[JsonClient[F]]=, not
-a =JsonClient[F]=. This is because the act of creating the client is effectful:
-mutable connection pools are created and managed internally by http4s.
-
-#+BEGIN_ASIDE
 =OAuth2JsonClientModule= requires a =MonadState= and =BlazeJsonClient= requires
-=MonadError= and =LiftIO=. Our application's context will now likely be the
-combination of both:
-
-#+BEGIN_SRC scala
-StateT[EitherT[IO, JsonClient.Error, ?], BearerToken, ?]
-#+END_SRC
-
-A monad stack. Monad stacks automatically provide appropriate instances of
-=MonadState= and =MonadError= when nested, so we don't need to think about it.
-If we had hard-coded the implementation in the interpreter, and returned an
-=EitherT[IO, Error, ?]= from =BlazeJsonClient=, it would make it a lot harder
-to instantiate.
-#+END_ASIDE
+=Effect=. Our application's context will now likely be a =StateT[IO,
+BearerToken, ?]=.
 
 We must not forget that we need to provide a =RefreshToken= for
 =GoogleMachinesModule=. We could ask the user to do all the legwork, but we are
@@ -10973,12 +10954,13 @@ final class AccessModule[F[_]: Monad](
   T: LocalClock[F]
 ) extends Access[F] { ... }
 
-final class BlazeUserInteraction private (
-  pserver: Promise[Void, Server[IO]],
-  ptoken: Promise[Void, String]
+final class BlazeUserInteraction[F[_]: Effect] private (
+  S: Sleep[F],
+  pserver: Deferred[F, Server[F]],
+  ptoken: Deferred[F, String]
 ) extends UserInteraction[IO] { ... }
 object BlazeUserInteraction {
-  def apply(): IO[BlazeUserInteraction] = ...
+  def apply[F[_]: ConcurrentEffect](S: Sleep[F]): F[BlazeUserInteraction[F]] = ...
 }
 #+END_SRC
 
@@ -10987,18 +10969,18 @@ it starts an HTTP server, sends the user to visit a webpage in their browser,
 captures a callback in the server, and then returns the result while safely
 shutting down the web server.
 
-Rather than using a =StateT= to manage this state, we use a =Promise= primitive
-(from =ioeffect=). We should always use =Promise= (or =IORef=) instead of a
-=StateT= when we are writing an =IO= interpreter since it allows us to contain
-the abstraction. If we were to use a =StateT=, not only would it have a
+Rather than using a =StateT= to manage this state, we use a =Deferred= primitive.
+We should always use =Deferred= (or =MVar=) instead of a
+=StateT= when we are writing an =IO= interpreter since it allows us to restrict
+the mutability to inside the implementation. If we were to use a =StateT=, not only would it have a
 performance impact on the entire application, but it would also leak internal
 state management to the main application, which would become responsible for
 providing the initial value. We also couldn't use =StateT= in this scenario
-because we need "wait for" semantics that are only provided by =Promise=.
+because we need "wait for" semantics that are only provided by =Deferred=.
 
 *** =Main=
 
-The ugliest part of FP is making sure that monads are all aligned and this tends
+Making sure that monads are all aligned tends
 to happen in the =Main= entrypoint.
 
 Our main loop is
@@ -11026,81 +11008,34 @@ where =F= holds the state of the world in a =MonadState[F, WorldView]=. We can
 put this into a method called =.step= and repeat it forever by calling
 =.step[F].forever[Unit]=.
 
-There are two approaches we can take, and we will explore both. The first, and
-simplest, is to construct one monad stack that all algebras are compatible with.
-Everything gets a =.liftM= added to it to lift it into the larger stack.
-
-The code we want to write for the one-shot authentication mode is
+Thankfully, the code we want to write for the one-shot authentication mode is
+all compatible with the same monadic context, =IO=
 
 #+BEGIN_SRC scala
   def auth(name: String): IO[Unit] = {
     for {
       config    <- readConfig[ServerConfig](name + ".server")
-      ui        <- BlazeUserInteraction()
+      sleeper   = new SleepIO
+      ui        <- BlazeUserInteraction(sleeper)
       auth      = new AuthModule(config)(ui)
       codetoken <- auth.authenticate
-      client    <- BlazeJsonClient
       clock     = new LocalClockIO
+      client    <- BlazeJsonClient[IO]
       access    = new AccessModule(config)(client, clock)
       token     <- access.access(codetoken)
-      _         <- putStrLn(s"got token: $token")
+      _         <- putStrLn(s"got token: ${token._1}")
     } yield ()
-  }.run
+  }
 #+END_SRC
 
 where =.readConfig= and =.putStrLn= are library calls. We can think of them as
 =IO= interpreters of algebras that read the application's runtime
 configuration and print a string to the screen.
 
-But this code does not compile, for two reasons. Firstly, we need to consider
-what our monad stack is going to be. The =BlazeJsonClient= constructor returns a
-=IO= but the =JsonClient= methods require a =MonadError[...,
-JsonClient.Error]=. This can be provided by =EitherT=. We can therefore
-construct the common monad stack for the entire =for= comprehension as
-
-#+BEGIN_SRC scala
-    type H[a] = EitherT[IO, JsonClient.Error, a]
-#+END_SRC
-
-Unfortunately this means we must =.liftM= everything that returns a =IO=,
-which adds quite a lot of boilerplate. Unfortunately, the =.liftM= method does
-not take a type of shape =H[_]=, it takes a type of shape =H[_[_], _]=, so we
-need to create a type alias to help out the compiler:
-
-#+BEGIN_SRC scala
-    type HT[f[_], a] = EitherT[f, JsonClient.Error, a]
-    type H[a]        = HT[IO, a]
-#+END_SRC
-
-we can now call =.liftM[HT]= when we receive a =IO=
-
-#+BEGIN_SRC scala
-    for {
-      config    <- readConfig[ServerConfig](name + ".server").liftM[HT]
-      ui        <- BlazeUserInteraction().liftM[HT]
-      auth      = new AuthModule(config)(ui)
-      codetoken <- auth.authenticate.liftM[HT]
-      client    <- BlazeJsonClient[H].liftM[HT]
-      clock     = new LocalClockIO
-      access    = new AccessModule(config)(client, clock)
-      token     <- access.access(codetoken)
-      _         <- putStrLn(s"got token: $token").liftM[HT]
-    } yield ()
-#+END_SRC
-
-But this still doesn't compile, because =clock= is a =LocalClock[IO]= and =AccessModule= requires a =LocalClock[H]=. We simply add the necessary =.liftM= boilerplate to the companion of =LocalClock= and can then lift the entire algebra
-
-#+BEGIN_SRC scala
-      clock     = LocalClock.liftM[IO, HT](new LocalClockIO)
-#+END_SRC
-
-and now everything compiles!
-
-The second approach to wiring up an application is more complex, but necessary
-when there are conflicts in the monad stack, such as we need in our main loop.
+However, the monads for the =.agents= loop do not align.
 If we perform an analysis we find that the following are needed:
 
-- =MonadError[F, JsonClient.Error]= for uses of the =JsonClient=
+- =MonadError[F, Throwable]= for uses of the =JsonClient=
 - =MonadState[F, BearerToken]= for uses of the =OAuth2JsonClient=
 - =MonadState[F, WorldView]= for our main loop
 
@@ -11109,86 +11044,54 @@ construct a data type that captures all the state of the program, but that is a
 leaky abstraction. Instead, we nest our =for= comprehensions and provide state
 where it is needed.
 
-We now need to think about three layers, which we will call =F=, =G=, =H=
+We now need to think about our three layers, which we can refer to as the
+"outer", "middle" and "inner" layers:
 
 #+BEGIN_SRC scala
-    type HT[f[_], a] = EitherT[f, JsonClient.Error, a]
-    type GT[f[_], a] = StateT[f, BearerToken, a]
-    type FT[f[_], a] = StateT[f, WorldView, a]
-
-    type H[a]        = HT[IO, a]
-    type G[a]        = GT[H, a]
-    type F[a]        = FT[G, a]
+    type Outer[a] = IO[a]
+    type Middle[a] = StateT[IO, BearerToken, a]
+    type Inner[a] = StateT[Middle, WorldView, a]
 #+END_SRC
 
-Now some bad news about =.liftM=... it only works for one layer at a time. If we
-have a =IO[A]= and we want an =F[A]=, we have to go through each step and type
-=ta.liftM[HT].liftM[GT].liftM[FT]=. Likewise, when lifting algebras we have to
-call =liftM= multiple times. To get a =Sleep[F]=, we have to type
+The main application can be written as
 
 #+BEGIN_SRC scala
-val S: Sleep[F] = {
-  import Sleep.liftM
-  liftM(liftM(liftM(new SleepIO)))
-}
-#+END_SRC
-
-and to get a =LocalClock[G]= we do two lifts
-
-#+BEGIN_SRC scala
-val T: LocalClock[G] = {
-  import LocalClock.liftM
-  liftM(liftM(new LocalClockIO))
-}
-#+END_SRC
-
-The main application then becomes
-
-#+BEGIN_SRC scala
-  def agents(bearer: BearerToken): IO[Unit] = {
-    ...
+def agents(bearer: BearerToken): IO[Unit] = for {
+  config  <- readConfig[AppConfig]("application.conf")
+  blazeIO <- BlazeJsonClient[IO]
+  blaze = blazeIO.mapK[Middle](liftIoK)
+  _ <- {
+    val bearerClient = new BearerJsonClientModule[Middle](bearer)(blaze)
+    val drone        = new DroneModule[Middle](bearerClient)
+    val clock        = (new LocalClockIO).mapK[Middle](liftIoK)
+    val refresh      = new RefreshModule[Middle](config.machines.server)(blaze, clock)
+    val oauthClient =
+      new OAuth2JsonClientModule[Middle](config.machines.token)(blaze, clock, refresh)
+    val machines = new GoogleMachinesModule[Middle](oauthClient)
+    val agents   = new DynAgentsModule[Middle](drone, machines)
     for {
-      config <- readConfig[AppConfig]
-      blaze  <- BlazeJsonClient[G]
-      _ <- {
-        val bearerClient = new BearerJsonClientModule(bearer)(blaze)
-        val drone        = new DroneModule(bearerClient)
-        val refresh      = new RefreshModule(config.machines.server)(blaze, T)
-        val oauthClient =
-          new OAuth2JsonClientModule(config.machines.token)(blaze, T, refresh)
-        val machines = new GoogleMachinesModule(oauthClient)
-        val agents   = new DynAgentsModule(drone, machines)
-        for {
-          start <- agents.initial
-          _ <- {
-            val fagents = DynAgents.liftM[G, FT](agents)
-            step(fagents, S).forever[Unit]
-          }.run(start)
-        } yield ()
-      }.eval(bearer).run
+      start <- agents.initial
+      sleeper = (new SleepIO).mapK[Inner](liftIoK)
+      fagents = agents.mapK[Inner](StateT.liftK)
+      _ <- step(fagents, sleeper).foreverM[Unit].runA(start)
     } yield ()
-  }
+  }.runA(bearer)
+} yield ()
 #+END_SRC
 
-where the outer loop is using =IO=, the middle loop is using =G=, and the
-inner loop is using =F=.
-
-The calls to =.run(start)= and =.eval(bearer)= are where we provide the initial
-state for the =StateT= parts of our application. The =.run= is to reveal the
-=EitherT= error.
+The two calls to =.runA= are where we provide the initial
+state for the =StateT= parts of our application.
 
 We can call these two application entry points from our =IOApp=
 
 #+BEGIN_SRC scala
-object Main extends IOApp {
-  def run(args: List[String]): IO[Void, ExitStatus] = {
+  def run(args: List[String]): IO[ExitCode] = {
     if (args.contains("--machines")) auth("machines")
     else agents(BearerToken("<invalid>", Epoch(0)))
-  }.attempt[Void].map {
-    case Right(_)   => ExitStatus.ExitNow(0)
-    case Left(err) => ExitStatus.ExitNow(1)
+  }.attempt.map {
+    case Right(_)  => ExitCode.Success
+    case Left(err) => ExitCode.Error
   }
-}
 #+END_SRC
 
 and then run it!
@@ -11209,6 +11112,11 @@ and then run it!
 #+END_SRC
 
 Yay!
+
+* Incomplete                                                          :final:
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: incomplete.md
+  :END:
 
 *** Blaze
 
