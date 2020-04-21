@@ -1787,10 +1787,9 @@ steals the namespace. If we were to define `sin(t: T)` somewhere else
 we get *ambiguous reference* errors. This is the same problem as
 Java's static methods vs class methods.
 
-W> The sort of developer who puts methods on a `trait`, requiring users to mix it
-W> with the *cake pattern*, is going straight to hell. It leaks internal
-W> implementation detail to public APIs, bloats bytecode, makes binary
-W> compatibility basically impossible, and confuses IDE autocompleters.
+W> Implementations on a `trait` that require users to use the *cake pattern* to
+W> "mix together" functionality leaks internal implementation detail to public
+W> APIs, bloats bytecode and complicates binary compatibility.
 
 With the `implicit class` language feature (also known as *extension
 methodology* or *syntax*), and a little boilerplate, we can get the
@@ -2794,16 +2793,16 @@ chapter later.
 {width=100%}
 ![](images/cats-core-tree.png)
 
-{width=80%}
+{width=100%}
 ![](images/cats-core-cliques.png)
 
-{width=40%}
+{width=60%}
 ![](images/cats-core-loners.png)
 
 
 ## Appendable Things
 
-{width=25%}
+{width=40%}
 ![](images/cats-appendable.png)
 
 {lang="text"}
@@ -2993,12 +2992,12 @@ implemented.
 However, in FP we prefer typeclasses for polymorphic functionality and even the
 concept of equality is captured at compiletime.
 
-{width=40%}
+{width=60%}
 ![](images/cats-objecty.png)
 
 {lang="text"}
 ~~~~~~~~
-  @typeclass trait Equal[F]  {
+  @typeclass trait Eq[F]  {
     @op("===") def eqv(x: A, y: A): Boolean
     @op("=!=") def neqv(x: A, y: A): Boolean = !eqv(x, y)
   }
@@ -3008,7 +3007,7 @@ Indeed `===` (*triple equals*) is more typesafe than `==` (*double
 equals*) because it can only be compiled when the types are the same
 on both sides of the comparison. This catches a lot of bugs.
 
-`.equal` has the same implementation requirements as `Object.equals`
+`.eqv` has the same implementation requirements as `Object.equals`
 
 -   *commutative* `f1 === f2` implies `f2 === f1`
 -   *reflexive* `f === f`
@@ -3070,7 +3069,7 @@ this is exactly what `Show` achieves:
 
 {lang="text"}
 ~~~~~~~~
-  trait Show[T] {
+  @typeclass trait Show[T] {
     def show(f: T): String = ...
   }
 ~~~~~~~~
@@ -3079,7 +3078,7 @@ And `Hash` achieves the same thing for `.hashCode`
 
 {lang="text"}
 ~~~~~~~~
-  trait Hash[A] {
+  @typeclass trait Hash[A] {
     def hash(x: A): Int = ...
   }
 ~~~~~~~~
@@ -3090,7 +3089,7 @@ And `Hash` achieves the same thing for `.hashCode`
 We're focusing on things that can be mapped over, or traversed, in
 some sense:
 
-{width=100%}
+{width=60%}
 ![](images/cats-mappable.png)
 
 
@@ -3479,7 +3478,7 @@ have an ordering.
 
 {lang="text"}
 ~~~~~~~~
-  trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
+  @typeclass trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
     def traverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[B]): G[F[B]]
     def sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] = ...
   
@@ -3705,7 +3704,7 @@ same value, allowing us to produce a single value and combine the two sides:
 
 {lang="text"}
 ~~~~~~~~
-  trait FunctorFilter[F[_]] extends Serializable {
+  @typeclass trait FunctorFilter[F[_]] extends Serializable {
     def functor: Functor[F]
   
     def mapFilter[A, B](fa: F[A])(f: A => Option[B]): F[B]
@@ -3721,7 +3720,7 @@ And similarly, `TraverseFilter` can filter the values while traversing or sequen
 
 {lang="text"}
 ~~~~~~~~
-  trait TraverseFilter[F[_]] extends FunctorFilter[F] {
+  @typeclass trait TraverseFilter[F[_]] extends FunctorFilter[F] {
     def traverse: Traverse[F]
   
     def traverseFilter[G[_]: Applicative, A, B](fa: F[A])(f: A => G[Option[B]]): G[F[B]]
@@ -4209,7 +4208,8 @@ matter.
 
 {lang="text"}
 ~~~~~~~~
-  @typeclass trait ContravariantMonoidal[F[_]] extends ContravariantSemigroupal[F] with InvariantMonoidal[F] {
+  @typeclass trait ContravariantMonoidal[F[_]] extends ContravariantSemigroupal[F]
+      with InvariantMonoidal[F] {
     def trivial[A]: F[A] = contramap(unit)(_ => ())
   
     def contramap2[A, B, Z](f0: F[A], f1: F[B])(f: Z => (A, B)): F[Z]
@@ -4230,7 +4230,7 @@ product type `Foo`
 {lang="text"}
 ~~~~~~~~
   scala> case class Foo(s: String, i: Int)
-  scala> implicit val fooEqual: Eq[Foo] =
+  scala> implicit val fooEq: Eq[Foo] =
            ContravariantMonoidal.contramap2(Eq[String], Eq[Int]) {
              (foo: Foo) => (foo.s, foo.i)
            }
@@ -4244,7 +4244,7 @@ use
 {lang="text"}
 ~~~~~~~~
   scala> case class Foo(s: String, i: Int)
-  scala> implicit val fooEqual: Eq[Foo] = (Eq[String], Eq[Int]).contramapN {
+  scala> implicit val fooEq: Eq[Foo] = (Eq[String], Eq[Int]).contramapN {
            foo : Foo => (foo.s, foo.i)
          }
   scala> Foo("foo", 1) === Foo("bar", 1)
@@ -4278,7 +4278,7 @@ create a broken `Eq`
 {lang="text"}
 ~~~~~~~~
   scala> case class Foo(s: String, i: Int)
-  scala> implicit val fooEqual: Eq[Foo] = ContravariantMonoidal[Eq].trivial
+  scala> implicit val fooEq: Eq[Foo] = ContravariantMonoidal[Eq].trivial
   scala> Foo("foo", 1) === Foo("bar", 1)
   res: Boolean = true // BROKEN!!
 ~~~~~~~~
@@ -7499,7 +7499,7 @@ depending on our usecase, the most commonly used being:
 `IO` provides a typeclass instance for `MonadError[Throwable, ?]` along with new
 typeclasses that are introduced by `cats-effect`
 
-{width=70%}
+{width=40%}
 ![](images/cats-effect.png)
 
 
@@ -7836,7 +7836,7 @@ Each example exhibits a feature that can be generalised:
 
 {lang="text"}
 ~~~~~~~~
-  @typeclass trait Equal[A]  {
+  @typeclass trait Eq[A]  {
     // type parameter is in contravariant (parameter) position
     @op("===") def eqv(a1: A, a2: A): Boolean
   }

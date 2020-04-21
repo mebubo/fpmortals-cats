@@ -295,7 +295,7 @@ asynchronous codepaths. We can write a mock implementation of
 Implementations of =Execution[Now]= and =Execution[Future]= are
 reusable by generic methods like =echo=.
 
-But the code for =echo= is horrible!
+But the code for =echo= is unpleasant.
 
 The =implicit class= Scala language feature gives =C= some methods.
 We will call these methods =flatMap= and =map= for reasons that will
@@ -2162,10 +2162,9 @@ we get /ambiguous reference/ errors. This is the same problem as
 Java's static methods vs class methods.
 
 #+BEGIN_WARNING
-The sort of developer who puts methods on a =trait=, requiring users to mix it
-with the /cake pattern/, is going straight to hell. It leaks internal
-implementation detail to public APIs, bloats bytecode, makes binary
-compatibility basically impossible, and confuses IDE autocompleters.
+Implementations on a =trait= that require users to use the /cake pattern/ to
+"mix together" functionality leaks internal implementation detail to public
+APIs, bloats bytecode and complicates binary compatibility.
 #+END_WARNING
 
 With the =implicit class= language feature (also known as /extension
@@ -3252,7 +3251,7 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 80
+#+CAPTION: 100
 #+RESULTS:
 [[file:images/cats-core-cliques.png]]
 
@@ -3273,7 +3272,7 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 40
+#+CAPTION: 60
 #+RESULTS:
 [[file:images/cats-core-loners.png]]
 
@@ -3297,7 +3296,7 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 25
+#+CAPTION: 40
 #+RESULTS:
 [[file:images/cats-appendable.png]]
 
@@ -3499,12 +3498,12 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 40
+#+CAPTION: 60
 #+RESULTS:
 [[file:images/cats-objecty.png]]
 
 #+BEGIN_SRC scala
-@typeclass trait Equal[F]  {
+@typeclass trait Eq[F]  {
   @op("===") def eqv(x: A, y: A): Boolean
   @op("=!=") def neqv(x: A, y: A): Boolean = !eqv(x, y)
 }
@@ -3514,7 +3513,7 @@ Indeed ~===~ (/triple equals/) is more typesafe than ~==~ (/double
 equals/) because it can only be compiled when the types are the same
 on both sides of the comparison. This catches a lot of bugs.
 
-=.equal= has the same implementation requirements as =Object.equals=
+=.eqv= has the same implementation requirements as =Object.equals=
 
 - /commutative/ ~f1 === f2~ implies ~f2 === f1~
 - /reflexive/ ~f === f~
@@ -3573,7 +3572,7 @@ not make sense in Java. We would like to enforce stringyness at compiletime and
 this is exactly what =Show= achieves:
 
 #+BEGIN_SRC scala
-trait Show[T] {
+@typeclass trait Show[T] {
   def show(f: T): String = ...
 }
 #+END_SRC
@@ -3581,7 +3580,7 @@ trait Show[T] {
 And =Hash= achieves the same thing for =.hashCode=
 
 #+BEGIN_SRC scala
-trait Hash[A] {
+@typeclass trait Hash[A] {
   def hash(x: A): Int = ...
 }
 #+END_SRC
@@ -3624,7 +3623,7 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 100
+#+CAPTION: 60
 #+RESULTS:
 [[file:images/cats-mappable.png]]
 
@@ -3984,7 +3983,7 @@ have an ordering.
 =Traverse= is what happens when we cross a =Functor= with a =Foldable=
 
 #+BEGIN_SRC scala
-trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
+@typeclass trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
   def traverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[B]): G[F[B]]
   def sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] = ...
 
@@ -4212,7 +4211,7 @@ res: Option[Either[Int,Int]] = Some(Left(4))
 =FunctorFilter= must be able to provide a =Functor=.
 
 #+BEGIN_SRC scala
-trait FunctorFilter[F[_]] extends Serializable {
+@typeclass trait FunctorFilter[F[_]] extends Serializable {
   def functor: Functor[F]
 
   def mapFilter[A, B](fa: F[A])(f: A => Option[B]): F[B]
@@ -4227,7 +4226,7 @@ trait FunctorFilter[F[_]] extends Serializable {
 And similarly, =TraverseFilter= can filter the values while traversing or sequencing
 
 #+BEGIN_SRC scala
-trait TraverseFilter[F[_]] extends FunctorFilter[F] {
+@typeclass trait TraverseFilter[F[_]] extends FunctorFilter[F] {
   def traverse: Traverse[F]
 
   def traverseFilter[G[_]: Applicative, A, B](fa: F[A])(f: A => G[Option[B]]): G[F[B]]
@@ -5032,7 +5031,8 @@ digraph G {
 =ContravariantMonoidal= is the =Contravariant= analogue of =Apply=
 
 #+BEGIN_SRC scala
-@typeclass trait ContravariantMonoidal[F[_]] extends ContravariantSemigroupal[F] with InvariantMonoidal[F] {
+@typeclass trait ContravariantMonoidal[F[_]] extends ContravariantSemigroupal[F]
+    with InvariantMonoidal[F] {
   def trivial[A]: F[A] = contramap(unit)(_ => ())
 
   def contramap2[A, B, Z](f0: F[A], f1: F[B])(f: Z => (A, B)): F[Z]
@@ -5052,7 +5052,7 @@ product type =Foo=
 
 #+BEGIN_SRC scala
 scala> case class Foo(s: String, i: Int)
-scala> implicit val fooEqual: Eq[Foo] =
+scala> implicit val fooEq: Eq[Foo] =
          ContravariantMonoidal.contramap2(Eq[String], Eq[Int]) {
            (foo: Foo) => (foo.s, foo.i)
          }
@@ -5065,7 +5065,7 @@ use
 
 #+BEGIN_SRC scala
 scala> case class Foo(s: String, i: Int)
-scala> implicit val fooEqual: Eq[Foo] = (Eq[String], Eq[Int]).contramapN {
+scala> implicit val fooEq: Eq[Foo] = (Eq[String], Eq[Int]).contramapN {
          foo : Foo => (foo.s, foo.i)
        }
 scala> Foo("foo", 1) === Foo("bar", 1)
@@ -5097,7 +5097,7 @@ create a broken =Eq=
 
 #+BEGIN_SRC scala
 scala> case class Foo(s: String, i: Int)
-scala> implicit val fooEqual: Eq[Foo] = ContravariantMonoidal[Eq].trivial
+scala> implicit val fooEq: Eq[Foo] = ContravariantMonoidal[Eq].trivial
 scala> Foo("foo", 1) === Foo("bar", 1)
 res: Boolean = true // BROKEN!!
 #+END_SRC
@@ -8367,7 +8367,7 @@ digraph G {
 }
 #+END_SRC
 
-#+CAPTION: 70
+#+CAPTION: 40
 #+RESULTS:
 [[file:images/cats-effect.png]]
 
@@ -8673,7 +8673,7 @@ This chapter will show how to define derivations for five specific typeclasses.
 Each example exhibits a feature that can be generalised:
 
 #+BEGIN_SRC scala
-  @typeclass trait Equal[A]  {
+  @typeclass trait Eq[A]  {
     // type parameter is in contravariant (parameter) position
     @op("===") def eqv(a1: A, a2: A): Boolean
   }

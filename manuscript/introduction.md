@@ -213,7 +213,7 @@ asynchronous codepaths. We can write a mock implementation of
 Implementations of `Execution[Now]` and `Execution[Future]` are
 reusable by generic methods like `echo`.
 
-But the code for `echo` is horrible!
+But the code for `echo` is unpleasant.
 
 The `implicit class` Scala language feature gives `C` some methods.
 We will call these methods `flatMap` and `map` for reasons that will
