@@ -37,7 +37,7 @@ object LookupRandom extends Lookup[IO] {
 // }
 
 object Logic {
-  type Ctx[A] = StateT[EitherT[IO, Problem, ?], Table, A]
+  type Ctx[A] = StateT[EitherT[IO, Problem, *], Table, A]
 
   def liftK: IO ~> Ctx = {
     type Ctx1[A] = EitherT[IO, Problem, A]

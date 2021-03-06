@@ -1,4 +1,4 @@
-scalaVersion in ThisBuild := "2.12.11"
+scalaVersion in ThisBuild := "2.12.13"
 scalacOptions in ThisBuild ++= Seq(
   "-language:_",
   "-Xfatal-warnings",
@@ -6,19 +6,43 @@ scalacOptions in ThisBuild ++= Seq(
   "-deprecation"
 )
 
-libraryDependencies ++= Seq(
-  "org.typelevel"        %% "simulacrum"      % "1.0.0",
-  "org.typelevel"        %% "cats-core"       % "2.1.1",
-  "org.typelevel"        %% "mouse"           % "0.24",
-  "org.typelevel"        %% "cats-mtl-core"   % "0.7.1",
-  "org.typelevel"        %% "cats-effect"     % "2.1.2",
-  "org.typelevel"        %% "kittens"         % "2.0.0",
-  "eu.timepit"           %% "refined-cats"    % "0.9.13",
-  "com.lihaoyi"          %% "sourcecode"      % "0.1.4"
+val commonDeps = Seq(
+  "org.typelevel"        %% "cats-kernel"     % "2.4.2",
+  "org.typelevel"        %% "cats-core"       % "2.4.2",
+  "org.typelevel"        %% "cats-effect"     % "2.3.3",
+  "com.lihaoyi"          %% "sourcecode"      % "0.2.3",
+  "com.chuusai"          %% "shapeless"       % "2.3.3",
+  "eu.timepit"           %% "refined"         % "0.9.21"
 )
 
-addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.11.0" cross CrossVersion.full)
-addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.full)
+val http4sVersion = "0.18.16"
+val exampleDeps = Seq(
+  "org.typelevel"         %% "simulacrum"          % "1.0.1",
+  "org.typelevel"         %% "jawn-parser"         % "1.1.0",
+  "org.typelevel"         %% "cats-mtl-core"       % "0.7.1",
+  "com.propensive"        %% "magnolia"            % "0.17.0",
+  "org.typelevel"         %% "cats-free"           % "2.4.2",
+  "com.propensive"        %% "contextual"          % "1.2.1",
+  "org.scalatest"         %% "scalatest"           % "3.2.5" % "test,it",
+  "org.http4s"            %% "http4s-dsl"          % http4sVersion,
+  "org.http4s"            %% "http4s-blaze-server" % http4sVersion,
+  "org.http4s"            %% "http4s-blaze-client" % http4sVersion
+)
+
+lazy val commonSettings = Seq(
+  addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.11.3" cross CrossVersion.full),
+  addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.full),
+  libraryDependencies ++= commonDeps
+)
+
+lazy val snippets = (project in file(".")).settings(
+  commonSettings
+)
+
+lazy val example = (project in file("example")).settings(
+  commonSettings,
+  libraryDependencies ++= exampleDeps
+)
 
 scalacOptions in (Compile, console) -= "-Xfatal-warnings"
 initialCommands in (Compile, console) := Seq(

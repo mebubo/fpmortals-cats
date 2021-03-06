@@ -17,14 +17,14 @@ object Drone {
   case class GetBacklog() extends Ast[Int]
   case class GetAgents()  extends Ast[Int]
 
-  def liftF[F[_]](implicit I: Ast :<: F): Drone[Free[F, ?]] =
-    new Drone[Free[F, ?]] {
+  def liftF[F[_]](implicit I: Ast :<: F): Drone[Free[F, *]] =
+    new Drone[Free[F, *]] {
       def getBacklog: Free[F, Int] = Free.liftF(I.inj(GetBacklog()))
       def getAgents: Free[F, Int]  = Free.liftF(I.inj(GetAgents()))
     }
 
-  def liftA[F[_]](implicit I: Ast :<: F): Drone[FreeApplicative[F, ?]] =
-    new Drone[FreeApplicative[F, ?]] {
+  def liftA[F[_]](implicit I: Ast :<: F): Drone[FreeApplicative[F, *]] =
+    new Drone[FreeApplicative[F, *]] {
       def getBacklog: FreeApplicative[F, Int] = FreeApplicative.lift(I.inj(GetBacklog()))
       def getAgents: FreeApplicative[F, Int]  = FreeApplicative.lift(I.inj(GetAgents()))
     }
@@ -52,8 +52,8 @@ object Machines {
   case class Start(node: MachineNode) extends Ast[Unit]
   case class Stop(node: MachineNode)  extends Ast[Unit]
 
-  def liftF[F[_]](implicit I: Ast :<: F): Machines[Free[F, ?]] =
-    new Machines[Free[F, ?]] {
+  def liftF[F[_]](implicit I: Ast :<: F): Machines[Free[F, *]] =
+    new Machines[Free[F, *]] {
       def getTime: Free[F, Epoch] = Free.liftF(I.inj(GetTime()))
       def getManaged: Free[F, NonEmptyList[MachineNode]] =
         Free.liftF(I.inj(GetManaged()))
@@ -65,8 +65,8 @@ object Machines {
         Free.liftF(I.inj(Stop(node)))
     }
 
-  def liftA[F[_]](implicit I: Ast :<: F): Machines[FreeApplicative[F, ?]] =
-    new Machines[FreeApplicative[F, ?]] {
+  def liftA[F[_]](implicit I: Ast :<: F): Machines[FreeApplicative[F, *]] =
+    new Machines[FreeApplicative[F, *]] {
       def getTime: FreeApplicative[F, Epoch] = FreeApplicative.lift(I.inj(GetTime()))
       def getManaged: FreeApplicative[F, NonEmptyList[MachineNode]] =
         FreeApplicative.lift(I.inj(GetManaged()))

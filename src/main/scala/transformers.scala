@@ -71,7 +71,7 @@ object BetterErrors {
 }
 
 object MockErrors {
-  final class MockTwitter extends Twitter[Either[String, ?]] {
+  final class MockTwitter extends Twitter[Either[String, *]] {
     def getUser(name: String): Either[String, Option[User]] =
       if (name.contains(" ")) Right(None)
       else if (name === "wobble") Left("connection error")
@@ -82,7 +82,7 @@ object MockErrors {
       else Left("stars have been replaced by hearts")
   }
 
-  implicit val twitter: Twitter[Either[String, ?]] = new MockTwitter
+  implicit val twitter: Twitter[Either[String, *]] = new MockTwitter
 
   def main(args: Array[String]) = {
     println(WithMonadError.stars("wibble"))
