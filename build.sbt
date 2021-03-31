@@ -9,13 +9,13 @@ scalacOptions in ThisBuild ++= Seq(
 val commonDeps = Seq(
   "org.typelevel"        %% "cats-kernel"     % "2.4.2",
   "org.typelevel"        %% "cats-core"       % "2.4.2",
-  "org.typelevel"        %% "cats-effect"     % "2.3.3",
-  "com.lihaoyi"          %% "sourcecode"      % "0.2.3",
+  "org.typelevel"        %% "cats-effect"     % "2.4.0",
+  "com.lihaoyi"          %% "sourcecode"      % "0.2.4",
   "com.chuusai"          %% "shapeless"       % "2.3.3",
   "eu.timepit"           %% "refined"         % "0.9.21"
 )
 
-val http4sVersion = "0.18.16"
+val http4sVersion = "0.18.26"
 val exampleDeps = Seq(
   "org.typelevel"         %% "simulacrum"          % "1.0.1",
   "org.typelevel"         %% "jawn-parser"         % "1.1.0",
@@ -23,7 +23,7 @@ val exampleDeps = Seq(
   "com.propensive"        %% "magnolia"            % "0.17.0",
   "org.typelevel"         %% "cats-free"           % "2.4.2",
   "com.propensive"        %% "contextual"          % "1.2.1",
-  "org.scalatest"         %% "scalatest"           % "3.2.5" % "test,it",
+  "org.scalatest"         %% "scalatest"           % "3.2.6" % "test,it",
   "org.http4s"            %% "http4s-dsl"          % http4sVersion,
   "org.http4s"            %% "http4s-blaze-server" % http4sVersion,
   "org.http4s"            %% "http4s-blaze-client" % http4sVersion
